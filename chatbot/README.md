@@ -3,7 +3,7 @@
   2.WebAPI(使用FlaskAPI撰寫, ChatBot設定介面所使用的)  
   
 * **檔案說明**  
-FlaskApi_xxx : flask撰寫的API  
+FlaskApi_HelperIntentModel_Train : flask撰寫的API , 用於模型訓練 
 FlaskApi_Check_xxx : 檢查API參數的decorators  
 HelperIntentModelUtility.py : 包裝CRUD DB的程式  
 notbook_xxx : 訓練模型實驗程式  

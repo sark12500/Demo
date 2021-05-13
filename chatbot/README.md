@@ -4,7 +4,7 @@
   
 * **檔案說明**  
 FlaskApi_HelperIntentModel_Train.py : flask撰寫的API , 用於模型訓練   
-FlaskApi_Check_xxx : 檢查API參數的decorators  
+FlaskApi_Check_HelperIntentModel.py : 檢查API參數的decorators  
 NLP_IntentPreprocessing.py : 前處理(結巴斷詞, 資料前處理......)  
 NLP_IntentModelFactory.py : 模型建立工廠  
 NLP_IntentDLModel.py : 深度學習模型(使用Keras)  

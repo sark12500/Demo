@@ -12,4 +12,4 @@ NLP_IntentMLModel.py : 機器學習模型(使用scikit-learn)
 NLP_IntentBertModel.py : Bert模型(使用pytorch-pretrained-bert)  
 notebook_ML_intent_training.ipynb : 訓練模型實驗程式    
 
-<img src="github_demo_flow.jpg" height="400" width="800">
+<img src="github_demo_flow2.jpg" height="400" width="800">

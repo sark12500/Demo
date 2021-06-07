@@ -1,8 +1,6 @@
-* **ChatBot分析**  
-  1.包含語意分析(NLP,NLU)  
-  2.WebAPI(使用FlaskAPI撰寫, ChatBot設定介面所使用的)  
-  
+ 
 * **檔案說明**  
+* **模型訓練的部分demo code, 並非完整專案**
 FlaskApi_HelperIntentModel_Train.py : flask撰寫的API , 用於模型訓練   
 FlaskApi_Check_HelperIntentModel.py : 檢查API參數的decorators  
 NLP_IntentPreprocessing.py : 前處理通用程式(結巴斷詞, 資料前處理......)  

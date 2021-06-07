@@ -1,5 +1,5 @@
  
-* **檔案說明**  
+###### 檔案說明  
 * **模型訓練的部分demo code, 並非完整專案**   
 FlaskApi_HelperIntentModel_Train.py : flask撰寫的API , 用於模型訓練   
 FlaskApi_Check_HelperIntentModel.py : 檢查API參數的decorators  

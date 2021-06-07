@@ -239,18 +239,6 @@ class IntentModelTrainingView(MethodView):
                         "verbose": 1
                     }
 
-                    # model_param = IntentTextCnnModelParam(sentence_max_len=sentence_max_len,
-                    #                                       embedding_output_dim=256,
-                    #                                       drop_out=0.75,
-                    #                                       l2_reg_lambda=0.0,
-                    #                                       batch_size=15,
-                    #                                       epochs=50,
-                    #                                       train_ratio=0.9,
-                    #                                       early_stop=30,
-                    #                                       optimizer='Adam',
-                    #                                       loss='sparse_categorical_crossentropy',
-                    #                                       )
-
                 elif algorithm == "1dcnn":
                     factory = IntentOnedCnnModelFactory()
                     model_param = {
@@ -268,18 +256,6 @@ class IntentModelTrainingView(MethodView):
                         "tokenizer_sub_name": ".pickle",
                         "verbose": 1
                     }
-
-                    # model_param = IntentOnedCnnModelParam(sentence_max_len=sentence_max_len,
-                    #                                       embedding_output_dim=256,
-                    #                                       kernel_size=3,
-                    #                                       filters=512,
-                    #                                       batch_size=15,
-                    #                                       epochs=50,
-                    #                                       train_ratio=0.9,
-                    #                                       early_stop=30,
-                    #                                       optimizer='Adam',
-                    #                                       loss='sparse_categorical_crossentropy',
-                    #                                       )
 
                 elif algorithm == "2dcnn":
                     factory = IntentTwodCnnModelFactory()
@@ -300,19 +276,6 @@ class IntentModelTrainingView(MethodView):
                         "verbose": 1
                     }
 
-                    # model_param = IntentTwodCnnModelParam(sentence_max_len=sentence_max_len,
-                    #                                       embedding_output_dim=256,
-                    #                                       drop_out=0.5,
-                    #                                       filter_sizes=[2, 3, 5],
-                    #                                       num_filters=512,
-                    #                                       batch_size=15,
-                    #                                       epochs=50,
-                    #                                       train_ratio=0.9,
-                    #                                       early_stop=30,
-                    #                                       optimizer='Adam',
-                    #                                       loss='sparse_categorical_crossentropy',
-                    #                                       )
-
                 elif algorithm == "gru":
                     factory = IntentGRUModelFactory()
                     model_param = {
@@ -329,16 +292,6 @@ class IntentModelTrainingView(MethodView):
                         "tokenizer_sub_name": ".pickle",
                         "verbose": 1
                     }
-                    # model_param = IntentGRUModelParam(sentence_max_len=sentence_max_len,
-                    #                                   embedding_output_dim=256,
-                    #                                   drop_out=0.2,
-                    #                                   batch_size=15,
-                    #                                   epochs=50,
-                    #                                   train_ratio=0.9,
-                    #                                   early_stop=30,
-                    #                                   optimizer='Adam',
-                    #                                   loss='sparse_categorical_crossentropy',
-                    #                                   )
 
                 elif algorithm == "rf":
                     # randomforest
@@ -512,43 +465,6 @@ class IntentModelTrainingView(MethodView):
                     """
                     model.train_model(x_train,
                                       y_train)
-
-                    # graph = Graph()
-                    # with graph.as_default():
-                    #     session = Session(graph=graph)
-                    #     with session.as_default():
-                    #         model.train_model(x_train=x_train,
-                    #                           y_train=y_train)
-                    #
-                    #         logger.debug('============ save_session ============')
-                    #         robot_id_model_id = robot_id + "+" + model_id
-                    #         intent_test_predictor.model_dict.update({robot_id_model_id: model})
-                    #         intent_test_predictor.graph_dict.update({robot_id_model_id: graph})
-                    #         intent_test_predictor.session_dict.update({robot_id_model_id: session})
-
-                    # robot_id_model_id = robot_id + "+" + model_id
-                    # session_data = intent_test_predictor.session_dict.get(robot_id_model_id, None)
-                    # if session_data:
-                    #     KS.set_session(intent_test_predictor.session_dict[robot_id_model_id])
-                    #     with intent_test_predictor.graph_dict[robot_id_model_id].as_default():
-                    #         model.train_model(x_train=x_train,
-                    #                           y_train=y_train)
-                    # else:
-                    #     model.train_model(x_train=x_train,
-                    #                       y_train=y_train)
-                    #
-                    #     graph = Graph()
-                    #     with graph.as_default():
-                    #         session = Session(graph=graph)
-                    #         with session.as_default():
-                    #
-                    #             logger.debug('============ save_session ============')
-                    #             robot_id_model_id = robot_id + "+" + model_id
-                    #             intent_test_predictor.model_dict.update({robot_id_model_id: model})
-                    #             intent_test_predictor.graph_dict.update({robot_id_model_id: graph})
-                    #             intent_test_predictor.session_dict.update({robot_id_model_id: session})
-                    #
-                    # logger.debug('============ train_model_finish ============')
 
                     """
                     model evaluate
@@ -780,8 +696,6 @@ class IntentModelTrainingView(MethodView):
                                    message=msg
                                    ), 999
 
-                # TODO: 非同步 following task
-
                 # 將model狀態 status=TRAIN to N
                 HelperIntentModelUtility.update_train_log_by_column(robot_id=robot_id,
                                                                     model_id=model_id,
@@ -816,9 +730,6 @@ class IntentModelTrainingView(MethodView):
                 )
                 # 轉成json保存
                 save_error_evaluate_json = json.dumps(save_error_evaluate)
-                # logger.debug(save_error_evaluate_json)
-
-                # logger.debug('@@@@@@ 3 insert_test_log over')
 
                 HelperIntentModelUtility.insert_test_log(robot_id=robot_id,
                                                          model_id=model_id,
@@ -857,15 +768,6 @@ class IntentModelTrainingView(MethodView):
                                                                                                   )
                     cql_list.append(cql)
                     param_tuple_list.append(param_tuple)
-
-                    # HelperIntentModelUtility.insert_train_sentence_log(robot_id=robot_id,
-                    #                                                    model_id=model_id,
-                    #                                                    skill_id=row['skill_id'],
-                    #                                                    sentence_id=row['sentence_id'],
-                    #                                                    sentence=row['sentence'],
-                    #                                                    cut_sentence=row['cut_words'],
-                    #                                                    create_date=row['create_date_x']
-                    #                                                    )
 
                 if len(cql_list) > 0:
                     # HelperIntentModelUtility.exec_cql_transations(cql_list)
@@ -1175,10 +1077,3 @@ if __name__ == "__main__":
     else:
         app.run(port=5019, host='0.0.0.0', debug=True, use_reloader=False, threaded=True)
 
-    # HelperData 5005
-    # SparkSubmit_HelperData 5006
-    # HelperDataModel 5007
-    # HelperData_mssql 5010
-    # HelperDataModel_mssql 5011
-    # HelperDataModel_mssql_py2 5019
-    # HelperDataModel_mssql_py3 5020

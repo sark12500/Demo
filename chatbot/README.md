@@ -1,6 +1,6 @@
  
 # 檔案說明  
-* **只展示方便閱讀的demo code**   
+* **只展示方便閱讀的部分demo code**   
 FlaskApi_HelperIntentModel_Train.py : flask撰寫的API , 用於模型訓練   
 FlaskApi_Check_HelperIntentModel.py : 檢查API參數的decorators  
 NLP_IntentPreprocessing.py : 前處理通用程式(結巴斷詞, 資料前處理......)  

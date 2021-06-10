@@ -8,6 +8,7 @@ NLP_IntentModelFactory.py : 模型建立工廠
 NLP_IntentDLModel.py : 深度學習模型(使用Keras)  
 NLP_IntentMLModel.py : 機器學習模型(使用scikit-learn)  
 NLP_IntentBertModel.py : Bert模型(使用pytorch-pretrained-bert)  
+MQ_IntentModelXX : MQ的consumer, 接到任務後執行模型訓練
 notebook_ML_intent_training.ipynb : 訓練模型實驗程式    
 
 * **完整的流程會如下圖**  

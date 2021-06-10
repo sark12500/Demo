@@ -25,22 +25,59 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from MyEnv import Get_MyEnv
+from Config_Helper import Get_HelperConfig
+from Config_Format import Get_FormatConfig
+import logging
 from NLP_IntentModel import IntentModel
 from NLP_IntentPreprocessing import IntentPreprocessing
-from NLP_JiebaSegmentor import Get_JiebaSegmentor
 
 
-class IntentBERTModel(IntentModel):
+class IntentBERTModel:
     __metaclass__ = ABCMeta
 
     def __init__(self):
-        super(IntentBERTModel, self).__init__()
+
+        # log
+        # 系統log只顯示error級別以上的
+        logging.basicConfig(level=logging.INFO,
+                            format='%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
+                            datefmt='%m-%d %H:%M:%S')
+        # 自訂log
+        self.logger = logging.getLogger('IntentBERTModel.py')
+        self.logger.setLevel(logging.DEBUG)
+
+        config = Get_HelperConfig()
+        self.HELPER_KEYSPACE = Get_MyEnv().env_helper_keyspace
+        self.HELPER_ERROR_LOG_TABLE = config.HELPER_ERROR_LOG_TABLE
+        self.HELPER_INTENT_MODEL_TABLE = config.HELPER_INTENT_MODEL_TABLE
+        self.HELPER_INTENT_TRAIN_SENTENCE_TABLE = config.HELPER_INTENT_TRAIN_SENTENCE_TABLE
+        self.HELPER_INTENT_TRAIN_LOG_TABLE = config.HELPER_INTENT_TRAIN_LOG_TABLE
+        self.HELPER_INTENT_TEST_LOG_TABLE = config.HELPER_INTENT_TEST_LOG_TABLE
+
+        config = Get_FormatConfig()
+        self.DATE_FORMAT_NORMAL = config.DATE_FORMAT_NORMAL
+
+        self.model = None
+        self.train_history = None
+        self.model_param = None
+        self.sentence_set_id = None
+        self.mapping = None
+        self.mapping_name = None
+        self.num_classes = 0
+        self.transformer = None
+
         self.algorithm_type = "BERT"
+
         # specify GPU device
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         if torch.cuda.is_available():
             n_gpu = torch.cuda.device_count()
             torch.cuda.get_device_name(0)
+
+        if torch.cuda.is_available():
+            print("=========== torch.cuda.is_available() == True !!! ===========")
+        else:
+            print("=========== torch.cuda.is_available() == False !!! ===========")
 
     @abstractmethod
     def build_model(self):
@@ -142,6 +179,7 @@ class IntentBERTModel(IntentModel):
         sentence_df[input_column] = sentence_df[input_column].apply(lambda s: "[CLS] " + s + " [SEP]")
 
         bert_base = model_param['bert_base']
+        bert_tokenizer_path = model_param['bert_tokenizer_path']
         attention_masks_column = model_param['attention_masks_column']
 
         # 有指定tokenizer的話就直接使用
@@ -152,7 +190,13 @@ class IntentBERTModel(IntentModel):
 
             # 取得此預訓練模型所使用的 tokenizer
             # 指定繁簡中文 BERT-BASE 預訓練模型
-            tokenizer = BertTokenizer.from_pretrained(bert_base)
+
+            ## download tokenizer
+            # tokenizer = BertTokenizer.from_pretrained(bert_base)
+
+            ## local tokenizer
+            tokenizer = BertTokenizer.from_pretrained(bert_tokenizer_path)
+
             self.transformer = tokenizer
 
         sentence = list(sentence_df[input_column])
@@ -460,7 +504,8 @@ class IntentBERTModel(IntentModel):
 
         if self.model:
 
-            model_to_save = self.model.module if hasattr(self.model, 'module') else self.model  # Only save the model it-self
+            model_to_save = self.model.module if hasattr(self.model,
+                                                         'module') else self.model  # Only save the model it-self
             output_model_file = os.path.join(model_path, model_name + ".bin")
             # if args.do_train:
             torch.save(model_to_save.state_dict(), output_model_file)
@@ -544,8 +589,17 @@ class IntentBERTModel(IntentModel):
 
         y_predict_probability = []
 
+        """ 
+        Move logits and labels to CPU
+        numpy does not support GPU
+        """
+        # logits = logits.detach().cpu().numpy()
+
         for ii, x in enumerate(logits):
-            y_predict_probability.append(np.array(F.softmax(x)))
+            if torch.cuda.is_available():
+                y_predict_probability.append(np.array(F.softmax(x).cpu().numpy()))
+            else:
+                y_predict_probability.append(np.array(F.softmax(x)))
 
             # self.logger.debug('self.get_model() transfer')
 
@@ -596,28 +650,17 @@ class IntentBERTModel(IntentModel):
         return predict_df
 
 
-# class IntentBertModelParam:
-#
-#     def __init__(self, num_classes=0, bert_base="bert-base-chinese", batch_size=16,
-#                  attention_masks_column='attention_masks', no_decay=['bias', 'gamma', 'beta'],
-#                  optimizer_name='BertAdam',
-#                  epochs=4):
-#         self.num_classes = num_classes
-#         self.bert_base = bert_base
-#         self.batch_size = batch_size
-#         self.epochs = epochs
-#         self.optimizer_name = optimizer_name
-#         self.no_decay = no_decay
-#         self.attention_masks_column = attention_masks_column
-
-
 class IntentBertModel(IntentBERTModel):
 
     def build_model(self, param):
         num_classes = param['num_classes']
         bert_base = param['bert_base']
+        bert_model = param['bert_model']
 
-        model = BertForSequenceClassification.from_pretrained(bert_base, num_labels=num_classes)
+        model = BertForSequenceClassification.from_pretrained(bert_model, num_labels=num_classes)
+        # model = BertForSequenceClassification.from_pretrained(bert_base, num_labels=num_classes)
+        if torch.cuda.is_available():
+            model.cuda()
 
         # model.summary()
         self.model = model

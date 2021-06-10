@@ -19,17 +19,49 @@ import pandas as pd
 import pickle
 
 from MyEnv import Get_MyEnv
+from Config_Helper import Get_HelperConfig
+from Config_Format import Get_FormatConfig
+import logging
 from NLP_IntentModel import IntentModel
 from NLP_IntentPreprocessing import IntentPreprocessing
 from NLP_JiebaSegmentor import Get_JiebaSegmentor
 
 
-class IntentMLModel(IntentModel):
+class IntentMLModel:
     __metaclass__ = ABCMeta
 
     def __init__(self):
-        super(IntentMLModel, self).__init__()
+        # log
+        # 系統log只顯示error級別以上的
+        logging.basicConfig(level=logging.INFO,
+                            format='%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
+                            datefmt='%m-%d %H:%M:%S')
+        # 自訂log
+        self.logger = logging.getLogger('IntentMLModel.py')
+        self.logger.setLevel(logging.DEBUG)
+
+        config = Get_HelperConfig()
+        self.HELPER_KEYSPACE = Get_MyEnv().env_helper_keyspace
+        self.HELPER_ERROR_LOG_TABLE = config.HELPER_ERROR_LOG_TABLE
+        self.HELPER_INTENT_MODEL_TABLE = config.HELPER_INTENT_MODEL_TABLE
+        self.HELPER_INTENT_TRAIN_SENTENCE_TABLE = config.HELPER_INTENT_TRAIN_SENTENCE_TABLE
+        self.HELPER_INTENT_TRAIN_LOG_TABLE = config.HELPER_INTENT_TRAIN_LOG_TABLE
+        self.HELPER_INTENT_TEST_LOG_TABLE = config.HELPER_INTENT_TEST_LOG_TABLE
+
+        config = Get_FormatConfig()
+        self.DATE_FORMAT_NORMAL = config.DATE_FORMAT_NORMAL
+
+        self.model = None
+        self.train_history = None
+        self.model_param = None
+        self.sentence_set_id = None
+        self.mapping = None
+        self.mapping_name = None
+        self.num_classes = 0
+        self.transformer = None
+
         self.algorithm_type = "ML"
+
     @abstractmethod
     def build_model(self):
         pass
@@ -330,8 +362,9 @@ class IntentMLModel(IntentModel):
         """
         pass
 
-    def predict_result(self, test_df, sentence_column, feature_column, target_column=None, target_index_column=None,
-                       batch_size=64, verbose=1, model_param={}):
+    def predict_result(self, test_df, sentence_column, feature_column,
+                       target_column=None, target_index_column=None,
+                       model_param={}):
         """
         模型預測
         """
@@ -388,15 +421,6 @@ class IntentMLModel(IntentModel):
         return predict_df
 
 
-# class IntentRandomForestModelParam:
-#
-#     def __init__(self, n_estimators=20, max_depth=[3, None], criterion=["gini"], num_classes=0):
-#         self.n_estimators = n_estimators
-#         self.max_depth = max_depth
-#         self.criterion = criterion
-#         self.num_classes = num_classes
-
-
 class IntentRandomForestModel(IntentMLModel):
 
     def build_model(self, param):
@@ -421,14 +445,6 @@ class IntentRandomForestModel(IntentMLModel):
                                         param_distributions=parameters,
                                         n_iter=20)
         self.model_param = param
-
-
-# class IntentLogisticRegressionModelParam:
-#
-#     def __init__(self, penalty=['l2'], c=[10], num_classes=0):
-#         self.penalty = penalty
-#         self.c = c
-#         self.num_classes = num_classes
 
 
 class IntentLogisticRegressionModel(IntentMLModel):

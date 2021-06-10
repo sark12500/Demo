@@ -24,16 +24,48 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from MyEnv import Get_MyEnv
+from Config_Helper import Get_HelperConfig
+from Config_Format import Get_FormatConfig
+import logging
 from NLP_IntentModel import IntentModel
-from NLP_IntentPreprocessing import IntentPreprocessing
+from NLP_IntentPreprocessing import IntentPreprocessing, IntentPreprocessing_Keras
 from NLP_JiebaSegmentor import Get_JiebaSegmentor
 
 
-class IntentDLModel(IntentModel):
+class IntentDLModel:
     __metaclass__ = ABCMeta
 
     def __init__(self):
-        super(IntentDLModel, self).__init__()
+
+        # log
+        # 系統log只顯示error級別以上的
+        logging.basicConfig(level=logging.INFO,
+                            format='%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
+                            datefmt='%m-%d %H:%M:%S')
+        # 自訂log
+        self.logger = logging.getLogger('IntentDLModel.py')
+        self.logger.setLevel(logging.DEBUG)
+
+        config = Get_HelperConfig()
+        self.HELPER_KEYSPACE = Get_MyEnv().env_helper_keyspace
+        self.HELPER_ERROR_LOG_TABLE = config.HELPER_ERROR_LOG_TABLE
+        self.HELPER_INTENT_MODEL_TABLE = config.HELPER_INTENT_MODEL_TABLE
+        self.HELPER_INTENT_TRAIN_SENTENCE_TABLE = config.HELPER_INTENT_TRAIN_SENTENCE_TABLE
+        self.HELPER_INTENT_TRAIN_LOG_TABLE = config.HELPER_INTENT_TRAIN_LOG_TABLE
+        self.HELPER_INTENT_TEST_LOG_TABLE = config.HELPER_INTENT_TEST_LOG_TABLE
+
+        config = Get_FormatConfig()
+        self.DATE_FORMAT_NORMAL = config.DATE_FORMAT_NORMAL
+
+        self.model = None
+        self.train_history = None
+        self.model_param = None
+        self.sentence_set_id = None
+        self.mapping = None
+        self.mapping_name = None
+        self.num_classes = 0
+        self.transformer = None
+
         self.algorithm_type = "DL"
 
     @abstractmethod
@@ -180,7 +212,7 @@ class IntentDLModel(IntentModel):
         self.logger.debug('sentence_max_len : {}'.format(sentence_max_len))
 
         # np array 轉 dataframe series
-        sentence_df[output_column] = IntentPreprocessing.pad_sequences(seq, sentence_max_len).tolist()
+        sentence_df[output_column] = IntentPreprocessing_Keras.pad_sequences(seq, sentence_max_len).tolist()
 
         # # 預測時不用保存特徵處理器
         # if is_training:
@@ -394,9 +426,10 @@ class IntentDLModel(IntentModel):
 
         self.logger.debug(self.get_model())
         # self.get_model()._make_predict_function()
+        verbose = model_param.get('model_param', 1)
         y_predict_probability = self.get_model().predict(x_test,
                                                          batch_size=model_param['batch_size'],
-                                                         verbose=model_param['verbose'])
+                                                         verbose=verbose)
         self.logger.debug('self.get_model() dl')
 
         # self.logger.debug(y_predict_probability)
@@ -442,25 +475,6 @@ class IntentDLModel(IntentModel):
 
         return predict_df
 
-# class IntentOnedCnnModelParam:
-#
-#     def __init__(self, sentence_max_len, embedding_output_dim=256, vocab_size=500,
-#                  kernel_size=3, filters=512, num_classes=0, batch_size=15, epochs=50,
-#                  train_ratio=0.9, early_stop=30, optimizer='Adam',
-#                  loss='sparse_categorical_crossentropy'):
-#         self.batch_size = batch_size
-#         self.epochs = epochs
-#         self.train_ratio = train_ratio
-#         self.early_stop = early_stop
-#         self.optimizer = optimizer
-#         self.loss = loss
-#         self.num_classes = num_classes
-#         self.vocab_size = vocab_size
-#         self.sentence_max_len = sentence_max_len
-#         self.embedding_output_dim = embedding_output_dim
-#         self.kernel_size = kernel_size
-#         self.filters = filters
-
 
 class IntentOnedCnnModel(IntentDLModel):
 
@@ -504,28 +518,6 @@ class IntentOnedCnnModel(IntentDLModel):
         # model.summary()
         self.model = model
         self.model_param = param
-
-
-# class IntentTwodCnnModelParam:
-#
-#     def __init__(self, sentence_max_len, embedding_output_dim=256, vocab_size=500,
-#                  drop_out=0.5, filter_sizes=[2, 3, 5], num_filters=512, num_classes=0,
-#                  batch_size=15, epochs=50,
-#                  train_ratio=0.9, early_stop=30, optimizer='Adam',
-#                  loss='sparse_categorical_crossentropy'):
-#         self.batch_size = batch_size
-#         self.epochs = epochs
-#         self.train_ratio = train_ratio
-#         self.early_stop = early_stop
-#         self.optimizer = optimizer
-#         self.loss = loss
-#         self.num_classes = num_classes
-#         self.vocab_size = vocab_size
-#         self.sentence_max_len = sentence_max_len
-#         self.embedding_output_dim = embedding_output_dim
-#         self.filter_sizes = filter_sizes
-#         self.num_filters = num_filters
-#         self.drop_out = drop_out
 
 
 class IntentTwodCnnModel(IntentDLModel):
@@ -577,27 +569,6 @@ class IntentTwodCnnModel(IntentDLModel):
         # model.summary()
         self.model = model
         self.model_param = param
-
-
-# class IntentTextCnnModelParam:
-#
-#     def __init__(self, sentence_max_len, embedding_output_dim=256, vocab_size=500,
-#                  drop_out=0.75, l2_reg_lambda=0, num_classes=0,
-#                  batch_size=15, epochs=50,
-#                  train_ratio=0.9, early_stop=30, optimizer='Adam',
-#                  loss='sparse_categorical_crossentropy'):
-#         self.batch_size = batch_size
-#         self.epochs = epochs
-#         self.train_ratio = train_ratio
-#         self.early_stop = early_stop
-#         self.optimizer = optimizer
-#         self.loss = loss
-#         self.num_classes = num_classes
-#         self.vocab_size = vocab_size
-#         self.sentence_max_len = sentence_max_len
-#         self.embedding_output_dim = embedding_output_dim
-#         self.l2_reg_lambda = l2_reg_lambda
-#         self.drop_out = drop_out
 
 
 class IntentTextCnnModel(IntentDLModel):
@@ -666,26 +637,6 @@ class IntentTextCnnModel(IntentDLModel):
         # model.summary()
         self.model = model
         self.model_param = param
-
-
-# class IntentGRUModelParam:
-#
-#     def __init__(self, sentence_max_len, embedding_output_dim=256, vocab_size=500,
-#                  drop_out=0.5, num_classes=0,
-#                  batch_size=15, epochs=50,
-#                  train_ratio=0.9, early_stop=30, optimizer='Adam',
-#                  loss='sparse_categorical_crossentropy'):
-#         self.batch_size = batch_size
-#         self.epochs = epochs
-#         self.train_ratio = train_ratio
-#         self.early_stop = early_stop
-#         self.optimizer = optimizer
-#         self.loss = loss
-#         self.num_classes = num_classes
-#         self.vocab_size = vocab_size
-#         self.sentence_max_len = sentence_max_len
-#         self.embedding_output_dim = embedding_output_dim
-#         self.drop_out = drop_out
 
 
 class IntentGRUModel(IntentDLModel):

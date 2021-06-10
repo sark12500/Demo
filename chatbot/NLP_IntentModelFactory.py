@@ -1,6 +1,12 @@
 # encoding=UTF-8
 # !flask/bin/python
 
+import sys
+
+if sys.version_info[0] < 3:
+    reload(sys)
+    sys.setdefaultencoding('utf-8')
+
 
 from abc import abstractmethod, ABCMeta
 
@@ -64,7 +70,7 @@ class IntentLogisticRegressionModelFactory(IntentModelFactory):
         print('create model : {algorithm}...'.format(algorithm='LogisticRegression'))
         return IntentLogisticRegressionModel()
 
-#
+
 # class IntenBertModelFactory(IntentModelFactory):
 #
 #     def create_model(self):

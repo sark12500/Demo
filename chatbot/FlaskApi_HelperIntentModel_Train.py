@@ -1,9 +1,11 @@
 #!flask/bin/python
 # -*- coding: utf-8 -*-
+
 import sys
 
-reload(sys)
-sys.setdefaultencoding('utf-8')
+if sys.version_info[0] < 3:
+    reload(sys)
+    sys.setdefaultencoding('utf-8')
 
 from flask_cors import CORS
 # from gevent.pywsgi import WSGIServer
@@ -37,6 +39,8 @@ CORS(app)
 """
 train at local VM
 """
+
+
 class IntentModelTrainingView(MethodView):
 
     @requires_helper_intent_model_training_type
@@ -181,6 +185,53 @@ class IntentModelTrainingView(MethodView):
                            data=[],
                            )
 
+        """
+        Bert 需要使用GPU訓練
+        會將任務送至mq
+        GPU VM 上會有MQ監聽程式負責訓練
+        """
+        if algorithm == 'bert':
+            # 新增訓練紀錄 status = QUEUE
+            HelperIntentModelUtility.insert_train_log(robot_id=robot_id,
+                                                      model_id=model_id,
+                                                      sentence_set_id=sentence_set_id,
+                                                      algorithm=algorithm,
+                                                      modify_user=modify_user,
+                                                      algorithm_param='',
+                                                      algorithm_type='',
+                                                      tokenizer_id='',
+                                                      mapping='',
+                                                      mapping_name='',
+                                                      train_test_size=train_test_split_size,
+                                                      status="QUEUE",
+                                                      nfs_model_id='',
+                                                      nfs_tokenizer_id=''
+                                                      )
+
+            # publish 到mq去排隊訓練
+            # mq = MqDAO()
+            # queue_id = Get_MyEnv().env_mq_name_intent_train_queue
+
+            # 目前只有一個GPU, 只搭配一個queue
+            queue_id = 'intent_model_train'
+            logger.info('queue_id : {}'.format(queue_id))
+            body = {
+                "robot_id": robot_id,
+                "model_id": model_id,
+                "sentence_set_id": sentence_set_id,
+                "algorithm": algorithm,
+                "modify_user": modify_user,
+                "train_test_split_size": train_test_split_size,
+                "sentence_max_len": sentence_max_len
+            }
+
+            mq.publish(queue_id, body)
+
+            return jsonify(code=StateCode.Success,
+                           message="success",
+                           data=[]
+                           )
+
         # # clear_session() muti-thread training problem,
         # # 重複訓練會發生not an element of the graph問題, 必須清理session
         # from keras import backend as KS
@@ -239,6 +290,18 @@ class IntentModelTrainingView(MethodView):
                         "verbose": 1
                     }
 
+                    # model_param = IntentTextCnnModelParam(sentence_max_len=sentence_max_len,
+                    #                                       embedding_output_dim=256,
+                    #                                       drop_out=0.75,
+                    #                                       l2_reg_lambda=0.0,
+                    #                                       batch_size=15,
+                    #                                       epochs=50,
+                    #                                       train_ratio=0.9,
+                    #                                       early_stop=30,
+                    #                                       optimizer='Adam',
+                    #                                       loss='sparse_categorical_crossentropy',
+                    #                                       )
+
                 elif algorithm == "1dcnn":
                     factory = IntentOnedCnnModelFactory()
                     model_param = {
@@ -256,6 +319,18 @@ class IntentModelTrainingView(MethodView):
                         "tokenizer_sub_name": ".pickle",
                         "verbose": 1
                     }
+
+                    # model_param = IntentOnedCnnModelParam(sentence_max_len=sentence_max_len,
+                    #                                       embedding_output_dim=256,
+                    #                                       kernel_size=3,
+                    #                                       filters=512,
+                    #                                       batch_size=15,
+                    #                                       epochs=50,
+                    #                                       train_ratio=0.9,
+                    #                                       early_stop=30,
+                    #                                       optimizer='Adam',
+                    #                                       loss='sparse_categorical_crossentropy',
+                    #                                       )
 
                 elif algorithm == "2dcnn":
                     factory = IntentTwodCnnModelFactory()
@@ -276,6 +351,19 @@ class IntentModelTrainingView(MethodView):
                         "verbose": 1
                     }
 
+                    # model_param = IntentTwodCnnModelParam(sentence_max_len=sentence_max_len,
+                    #                                       embedding_output_dim=256,
+                    #                                       drop_out=0.5,
+                    #                                       filter_sizes=[2, 3, 5],
+                    #                                       num_filters=512,
+                    #                                       batch_size=15,
+                    #                                       epochs=50,
+                    #                                       train_ratio=0.9,
+                    #                                       early_stop=30,
+                    #                                       optimizer='Adam',
+                    #                                       loss='sparse_categorical_crossentropy',
+                    #                                       )
+
                 elif algorithm == "gru":
                     factory = IntentGRUModelFactory()
                     model_param = {
@@ -292,6 +380,16 @@ class IntentModelTrainingView(MethodView):
                         "tokenizer_sub_name": ".pickle",
                         "verbose": 1
                     }
+                    # model_param = IntentGRUModelParam(sentence_max_len=sentence_max_len,
+                    #                                   embedding_output_dim=256,
+                    #                                   drop_out=0.2,
+                    #                                   batch_size=15,
+                    #                                   epochs=50,
+                    #                                   train_ratio=0.9,
+                    #                                   early_stop=30,
+                    #                                   optimizer='Adam',
+                    #                                   loss='sparse_categorical_crossentropy',
+                    #                                   )
 
                 elif algorithm == "rf":
                     # randomforest
@@ -318,7 +416,7 @@ class IntentModelTrainingView(MethodView):
                     # model_param = IntentLogisticRegressionModelParam()
 
                 # elif algorithm == "bert":
-                #     # bert
+                #     # BERT code
                 #     factory = IntenBertModelFactory()
                 #     model_param = {
                 #         "bert_base": "bert-base-chinese",
@@ -329,7 +427,9 @@ class IntentModelTrainingView(MethodView):
                 #         "attention_masks_column": 'attention_masks',
                 #         "optimizer_name": 'BertAdam',
                 #         "model_sub_name": ".bin",
-                #         "tokenizer_sub_name": ".pickle"
+                #         "tokenizer_sub_name": ".pickle",
+                #         "bert_tokenizer_path": Get_MyEnv().env_fs_model_path + "bert/bert-base-chinese-vocab.txt",
+                #         "bert_model": Get_MyEnv().env_fs_model_path + "bert/bert-base-chinese.tar.gz"
                 #     }
                 #
                 #     # model_param = IntentBertModelParam(num_classes=0,
@@ -465,6 +565,43 @@ class IntentModelTrainingView(MethodView):
                     """
                     model.train_model(x_train,
                                       y_train)
+
+                    # graph = Graph()
+                    # with graph.as_default():
+                    #     session = Session(graph=graph)
+                    #     with session.as_default():
+                    #         model.train_model(x_train=x_train,
+                    #                           y_train=y_train)
+                    #
+                    #         logger.debug('============ save_session ============')
+                    #         robot_id_model_id = robot_id + "+" + model_id
+                    #         intent_test_predictor.model_dict.update({robot_id_model_id: model})
+                    #         intent_test_predictor.graph_dict.update({robot_id_model_id: graph})
+                    #         intent_test_predictor.session_dict.update({robot_id_model_id: session})
+
+                    # robot_id_model_id = robot_id + "+" + model_id
+                    # session_data = intent_test_predictor.session_dict.get(robot_id_model_id, None)
+                    # if session_data:
+                    #     KS.set_session(intent_test_predictor.session_dict[robot_id_model_id])
+                    #     with intent_test_predictor.graph_dict[robot_id_model_id].as_default():
+                    #         model.train_model(x_train=x_train,
+                    #                           y_train=y_train)
+                    # else:
+                    #     model.train_model(x_train=x_train,
+                    #                       y_train=y_train)
+                    #
+                    #     graph = Graph()
+                    #     with graph.as_default():
+                    #         session = Session(graph=graph)
+                    #         with session.as_default():
+                    #
+                    #             logger.debug('============ save_session ============')
+                    #             robot_id_model_id = robot_id + "+" + model_id
+                    #             intent_test_predictor.model_dict.update({robot_id_model_id: model})
+                    #             intent_test_predictor.graph_dict.update({robot_id_model_id: graph})
+                    #             intent_test_predictor.session_dict.update({robot_id_model_id: session})
+                    #
+                    # logger.debug('============ train_model_finish ============')
 
                     """
                     model evaluate
@@ -696,6 +833,8 @@ class IntentModelTrainingView(MethodView):
                                    message=msg
                                    ), 999
 
+                # TODO: 非同步 following task
+
                 # 將model狀態 status=TRAIN to N
                 HelperIntentModelUtility.update_train_log_by_column(robot_id=robot_id,
                                                                     model_id=model_id,
@@ -730,6 +869,9 @@ class IntentModelTrainingView(MethodView):
                 )
                 # 轉成json保存
                 save_error_evaluate_json = json.dumps(save_error_evaluate)
+                # logger.debug(save_error_evaluate_json)
+
+                # logger.debug('@@@@@@ 3 insert_test_log over')
 
                 HelperIntentModelUtility.insert_test_log(robot_id=robot_id,
                                                          model_id=model_id,
@@ -769,6 +911,15 @@ class IntentModelTrainingView(MethodView):
                     cql_list.append(cql)
                     param_tuple_list.append(param_tuple)
 
+                    # HelperIntentModelUtility.insert_train_sentence_log(robot_id=robot_id,
+                    #                                                    model_id=model_id,
+                    #                                                    skill_id=row['skill_id'],
+                    #                                                    sentence_id=row['sentence_id'],
+                    #                                                    sentence=row['sentence'],
+                    #                                                    cut_sentence=row['cut_words'],
+                    #                                                    create_date=row['create_date_x']
+                    #                                                    )
+
                 if len(cql_list) > 0:
                     # HelperIntentModelUtility.exec_cql_transations(cql_list)
                     HelperIntentModelUtility.exec_cql_transations_param_tuple(cql_list, param_tuple_list)
@@ -803,6 +954,8 @@ class IntentModelTrainingView(MethodView):
 """
 train at remote VM
 """
+
+
 class IntentModelTrainingRemoteView(MethodView):
 
     @requires_helper_intent_model_training_type
@@ -860,17 +1013,18 @@ class IntentModelTrainingRemoteView(MethodView):
                            data=[],
                            )
 
-        # 一個機器人只能同時train一個model
-        df = HelperIntentModelUtility.query_train_log(robot_id=robot_id)
-        if len(df[df.status == 'TRAIN']) > 0 or len(df[df.status == 'QUEUE']) > 0:
-            return jsonify(code=StateCode_HelperData.ModelInTraining,
-                           message="This robot_id={} is training.".format(robot_id),
-                           data=[],
-                           )
+        # # 使用Queue, 可以一次發出多個訓練request去排隊, 只要model_id不同
+        # # 一個機器人只能同時train一個model
+        # df = HelperIntentModelUtility.query_train_log(robot_id=robot_id)
+        # if len(df[df.status == 'TRAIN']) > 0 or len(df[df.status == 'QUEUE']) > 0:
+        #     return jsonify(code=StateCode_HelperData.ModelInTraining,
+        #                    message="This robot_id={} is training.".format(robot_id),
+        #                    data=[],
+        #                    )
 
         # model已經存在
-        # df = HelperIntentModelUtility.query_train_log(robot_id=robot_id,
-        #                                               model_id=model_id)
+        df = HelperIntentModelUtility.query_train_log(robot_id=robot_id,
+                                                      model_id=model_id)
         if len(df[df.model_id == model_id]) > 0:
             return jsonify(code=StateCode_HelperData.ModelExist,
                            message="This robot_id={} + model_id={} has existed.".format(robot_id, model_id),
@@ -893,6 +1047,8 @@ class IntentModelTrainingRemoteView(MethodView):
                                                                                              algorithm),
                            data=[],
                            )
+
+        algorithm_type = df['algorithm_type'][0]
 
         """
         判斷方法1: robot的上傳語句集要包含2個skill以上 + 每個skill句子數量 > 5 才能train
@@ -965,8 +1121,19 @@ class IntentModelTrainingRemoteView(MethodView):
                                                   )
 
         # publish 到mq去排隊訓練
-        # mq = MqDAO()
-        queue_id = Get_MyEnv().env_mq_name_intent_train_queue
+        if algorithm_type == 'ML':
+            queue_id = Get_MyEnv().env_mq_name_intent_train_ml_queue
+        elif algorithm_type == 'DL':
+            queue_id = Get_MyEnv().env_mq_name_intent_train_dl_queue
+        elif algorithm_type == 'BERT':
+            queue_id = Get_MyEnv().env_mq_name_intent_train_bert_queue
+        else:
+            return jsonify(code=StateCode_HelperData.ModelNotExist,
+                           data=[],
+                           message='algorithm_type is not exist'
+                           ), 999
+
+        logger.info('queue_id : {}'.format(queue_id))
         body = {
             "robot_id": robot_id,
             "model_id": model_id,
@@ -1077,3 +1244,10 @@ if __name__ == "__main__":
     else:
         app.run(port=5019, host='0.0.0.0', debug=True, use_reloader=False, threaded=True)
 
+    # HelperData 5005
+    # SparkSubmit_HelperData 5006
+    # HelperDataModel 5007
+    # HelperData_mssql 5010
+    # HelperDataModel_mssql 5011
+    # HelperDataModel_mssql_py2 5019
+    # HelperDataModel_mssql_py3 5020

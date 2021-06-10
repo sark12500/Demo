@@ -1,6 +1,5 @@
 # Demo
 
 * **ChatBot**  
-  1.包含語意分析(NLP,NLU)  
-  2.WebAPI(使用FlaskAPI撰寫ChatBot設定介面所使用的)  
+  1. chatbot意圖模型訓練部分demo程式碼
 

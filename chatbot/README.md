@@ -19,4 +19,4 @@ notebook_ML_intent_training.ipynb : 訓練模型實驗程式
 5. 每個演算法必須實作其介面, 如圖灰框所示
 6. 訓練完成後會將訓練log存入資料庫
 7. model存入nfs
-<img src="github_demo_flow4.jpg" height="450" width="800">
+<img src="github_train_flow_demo.jpg" height="450" width="800">

@@ -2,6 +2,7 @@
 # !flask/bin/python
 
 import sys
+import time
 
 if sys.version_info[0] < 3:
     reload(sys)
@@ -11,6 +12,7 @@ import pika
 import time, json, sys
 from datetime import datetime
 from MqDAO import MqDAO
+import docker
 import pandas as pd
 import numpy as np
 import logging
@@ -61,218 +63,235 @@ if __name__ == '__main__':
 
     def train(ch, method, properties, body):
 
-        logger.info(" [x] Received .")
-        logger.info(body)
+        try:
+            logger.info(" [x] Received .")
+            logger.info(body)
 
-        body = json.loads(body)
-        logger.info("mq callback time : " + str(datetime.now()))
+            body = json.loads(body)
+            logger.info("mq callback time : " + str(datetime.now()))
 
-        # body = {
-        #     "robot_id": "hr.00001318",
-        #     "model_id": "model_name",
-        #     "sentence_set_id": "sentence_01",
-        #     "algorithm": "textcnn",
-        #     "modify_user": "charles.huang@quantatw.com",
-        #     "train_test_split_size": 0.8,
-        #     "sentence_max_len": 20
-        # }
+            # body = {
+            #     "robot_id": "hr.00001318",
+            #     "model_id": "model_name",
+            #     "sentence_set_id": "sentence_01",
+            #     "algorithm": "textcnn",
+            #     "modify_user": "charles.huang@quantatw.com",
+            #     "train_test_split_size": 0.8,
+            #     "sentence_max_len": 20
+            # }
 
-        robot_id = body['robot_id']
-        model_id = body['model_id']
-        sentence_set_id = body['sentence_set_id']
-        algorithm = body['algorithm']
-        modify_user = body['modify_user']
+            robot_id = body['robot_id']
+            model_id = body['model_id']
+            sentence_set_id = body['sentence_set_id']
+            algorithm = body['algorithm']
+            modify_user = body['modify_user']
+            check_skill_label = body.get('check_skill_label', True)
 
-        # 向量長度 - 取最長的單字向量長度
-        sentence_max_len = body.get('sentence_max_len', 10)
-        # 訓練測試切割
-        train_test_split_size = body.get('train_test_split_size', 0.8)
+            # 向量長度 - 取最長的單字向量長度
+            sentence_max_len = body.get('sentence_max_len', 10)
+            # 訓練測試切割
+            train_test_split_size = body.get('train_test_split_size', 0.8)
 
-        # 接到queue的event status = GET_QUEUE
-        HelperIntentModelUtility.update_train_log_by_column(robot_id=robot_id,
-                                                            model_id=model_id,
-                                                            status="GET_QUEUE")
+            # 接到queue的event 開始進行前處理 PREPROCESSING
+            HelperIntentModelUtility.update_train_log_by_column(robot_id=robot_id,
+                                                                model_id=model_id,
+                                                                status="TRAIN",
+                                                                status_debug="PREPROCESSING")
 
-        sentence_df = HelperIntentModelUtility.query_train_sentence(robot_id=robot_id,
-                                                                    sentence_set_id=sentence_set_id)
+            sentence_df = HelperIntentModelUtility.query_train_sentence(robot_id=robot_id,
+                                                                        sentence_set_id=sentence_set_id)
 
-        train_sentence_skill_sum = sentence_df.groupby(["skill_id"]).size()
+            train_sentence_skill_sum = sentence_df.groupby(["skill_id"]).size()
 
-        # # clear_session() muti-thread training problem,
-        # # 重複訓練會發生not an element of the graph問題, 必須清理session
-        # from keras import backend as KS
-        # KS.clear_session()
-        graph = Graph()
-        with graph.as_default():
-            session = Session(graph=graph)
-            with session.as_default():
+            # # clear_session() muti-thread training problem,
+            # # 重複訓練會發生not an element of the graph問題, 必須清理session
+            # from keras import backend as KS
+            # KS.clear_session()
+            graph = Graph()
+            with graph.as_default():
+                session = Session(graph=graph)
+                with session.as_default():
 
-                # 組出skill_name
-                robot_skill_df = HelperIntentModelUtility.query_robot_skill(robot_id=robot_id)
-                # 合併查詢
-                sentence_df = pd.merge(sentence_df, robot_skill_df, how='inner', on=['skill_id'])
-                sentence_df = sentence_df[['skill_id', 'skill_name', 'sentence_id', 'sentence', 'create_date_x']]
+                    if check_skill_label:
+                        # skill label must mapping
+                        # 組出skill_name
+                        robot_skill_df = HelperIntentModelUtility.query_robot_skill(robot_id=robot_id)
+                        # 合併查詢
+                        sentence_df = pd.merge(sentence_df, robot_skill_df, how='inner', on=['skill_id'])
+                        sentence_df = sentence_df[['skill_id', 'skill_name', 'sentence_id', 'sentence', 'create_date_x']]
+                    else:
 
-                # 只有一個skill, 使用語料庫句子, 組成兩個句子一起訓練
-                one_skill = False
-                other_skill_id = "_other"
-                other_skill_name = "其他"
-                # one_skill_id = "one_skill_id"
+                        # skill label no need mapping
+                        sentence_df['create_date_x'] = sentence_df['create_date']
+                        sentence_df['skill_name'] = sentence_df['skill_id']
+                        sentence_df = sentence_df[['skill_id', 'skill_name', 'sentence_id', 'sentence', 'create_date_x']]
 
-                if len(train_sentence_skill_sum) == 1:
-                    logger.debug("======== one_skill =======")
+                    # 只有一個skill, 使用語料庫句子, 組成兩個句子一起訓練
+                    one_skill = False
+                    other_skill_id = "_other"
+                    other_skill_name = "其他"
+                    # one_skill_id = "one_skill_id"
 
-                    # one_skill_id = sentence_df['skill_id'][0]
+                    if len(train_sentence_skill_sum) == 1:
+                        logger.debug("======== one_skill =======")
 
-                    limit = len(sentence_df)
-                    corpus_df = HelperIntentModelUtility.query_train_sentence_corpus(skill_id='gossip',
-                                                                                     random=True,
-                                                                                     limit=limit)
-                    corpus_df['skill_id'] = other_skill_id
-                    corpus_df['skill_name'] = other_skill_name
-                    corpus_df['sentence_id'] = 'corpus'
-                    corpus_df = corpus_df[['skill_id', 'skill_name', 'sentence_id', 'sentence']]
-                    # logger.debug("=== corpus_df ===")
-                    # logger.debug(corpus_df)
-                    sentence_df = sentence_df.append(corpus_df)
-                    one_skill = True
+                        # one_skill_id = sentence_df['skill_id'][0]
 
-                # 演算法工廠
-                if algorithm == "bert":
-                    # BERT code
-                    factory = IntenBertModelFactory()
-                    model_param = {
-                        "bert_base": "bert-base-chinese",
-                        "batch_size": 16,
-                        "epochs": 3,
-                        "sentence_max_len": 20,
-                        "no_decay": ['bias', 'gamma', 'beta'],
-                        "attention_masks_column": 'attention_masks',
-                        "optimizer_name": 'BertAdam',
-                        "model_sub_name": ".bin",
-                        "tokenizer_sub_name": ".pickle",
-                        "bert_tokenizer_path": Get_MyEnv().env_fs_model_path + "bert/bert-base-chinese-vocab.txt",
-                        "bert_model": Get_MyEnv().env_fs_model_path + "bert/bert-base-chinese.tar.gz"
-                    }
+                        limit = len(sentence_df)
+                        corpus_df = HelperIntentModelUtility.query_train_sentence_corpus(skill_id='gossip',
+                                                                                         random=True,
+                                                                                         limit=limit)
+                        corpus_df['skill_id'] = other_skill_id
+                        corpus_df['skill_name'] = other_skill_name
+                        corpus_df['sentence_id'] = 'corpus'
+                        corpus_df = corpus_df[['skill_id', 'skill_name', 'sentence_id', 'sentence']]
+                        # logger.debug("=== corpus_df ===")
+                        # logger.debug(corpus_df)
+                        sentence_df = sentence_df.append(corpus_df)
+                        one_skill = True
 
-                else:
-                    # 此區塊不該發生
-                    model_param = {}
-                    factory = None
-                    error_msg = "algorithm : {algorithm} has not implemented !!".format(algorithm=algorithm)
-                    logger.error(error_msg)
-                    # data = [request.json]
-                    # return jsonify(code=StateCode_HelperData.ModelNotExist,
-                    #                message=error_msg,
-                    #                data=data
-                    #                )
+                    # 演算法工廠
+                    if algorithm == "bert":
+                        # BERT code
+                        factory = IntenBertModelFactory()
+                        model_param = {
+                            "bert_base": "bert-base-chinese",
+                            "batch_size": 16,
+                            "epochs": 4,
+                            "sentence_max_len": 20,
+                            "no_decay": ['bias', 'gamma', 'beta'],
+                            "attention_masks_column": 'attention_masks',
+                            "optimizer_name": 'BertAdam',
+                            "model_sub_name": ".bin",
+                            "tokenizer_sub_name": ".pickle",
+                            "bert_tokenizer_path": Get_MyEnv().env_fs_model_path + "bert/bert-base-chinese-vocab.txt",
+                            "bert_model": Get_MyEnv().env_fs_model_path + "bert/bert-base-chinese.tar.gz"
+                        }
 
-                # 每個演算法都有的參數
-                model_param.update(
-                    {
-                        "num_classes": 0,
-                        "sentence_max_len": sentence_max_len,
-                        "train_test_split_size": train_test_split_size
-                    })
+                    else:
+                        # 此區塊不該發生
+                        model_param = {}
+                        factory = None
+                        error_msg = "algorithm : {algorithm} has not implemented !!".format(algorithm=algorithm)
+                        logger.error(error_msg)
+                        # data = [request.json]
+                        # return jsonify(code=StateCode_HelperData.ModelNotExist,
+                        #                message=error_msg,
+                        #                data=data
+                        #                )
 
-                """
-                建立模型,使用create_model(), 將model new出來
-                EX：LogisticRegression就有好幾種變化的model, 未來可以入參數生產不同的LogisticRegression model
-                """
-                logger.debug('create_model()')
-                model = factory.create_model()
+                    # 每個演算法都有的參數
+                    model_param.update(
+                        {
+                            "num_classes": 0,
+                            "sentence_max_len": sentence_max_len,
+                            "train_test_split_size": train_test_split_size
+                        })
 
-                sentence_column = 'sentence'
-                preprocessing_column = 'cut_words'
-                feature_column = 'feature'
-                target_column = 'skill_id'
-                target_index_column = 'target_index'
+                    """
+                    建立模型,使用create_model(), 將model new出來
+                    EX：LogisticRegression就有好幾種變化的model, 未來可以入參數生產不同的LogisticRegression model
+                    """
+                    logger.debug('create_model()')
+                    model = factory.create_model()
 
-                logger.debug('preprocessing')
+                    sentence_column = 'sentence'
+                    preprocessing_column = 'cut_words'
+                    feature_column = 'feature'
+                    target_column = 'skill_id'
+                    target_name_column = 'skill_name'
+                    target_index_column = 'target_index'
 
-                # 資料前處理
-                sentence_df = model.preprocessing(sentence_df=sentence_df,
-                                                  input_column=sentence_column,
-                                                  output_column=preprocessing_column)
+                    logger.debug('preprocessing')
 
-                logger.debug('mapping_setting')
+                    # 資料前處理
+                    sentence_df = model.preprocessing(sentence_df=sentence_df,
+                                                      input_column=sentence_column,
+                                                      output_column=preprocessing_column)
 
-                # target(EX: weather)必須轉成index(EX:0), model才能使用, 保留對應的mapping將來轉回target文字(0 -> weather)
-                sentence_df = model.mapping_setting(sentence_df=sentence_df,
-                                                    input_column=target_column,
-                                                    output_column=target_index_column)
+                    logger.debug('mapping_setting')
 
-                logger.debug('feature_engineering')
+                    # target(EX: weather)必須轉成index(EX:0), model才能使用, 保留對應的mapping將來轉回target文字(0 -> weather)
+                    sentence_df = model.mapping_setting(sentence_df=sentence_df,
+                                                        input_column=target_column,
+                                                        output_column=target_index_column,
+                                                        target_id=target_column,
+                                                        target_name=target_name_column)
 
-                # 特徵工程
-                feature_transformer_path = Get_MyEnv().env_fs_model_path + "intent/"
-                feature_transformer_name = robot_id + "+" + model_id
-                sentence_df = model.feature_engineering(sentence_df=sentence_df,
-                                                        input_column=preprocessing_column,
-                                                        output_column=feature_column,
-                                                        model_param=model_param)
+                    logger.debug('feature_engineering')
+                    HelperIntentModelUtility.update_train_log_by_column(robot_id=robot_id,
+                                                                        model_id=model_id,
+                                                                        status_debug="FEATURE_ENGINEERING")
 
-                logger.debug('save_transformer')
+                    # 特徵工程
+                    feature_transformer_path = Get_MyEnv().env_fs_model_path + "intent/"
+                    feature_transformer_name = robot_id + "+" + model_id
+                    sentence_df = model.feature_engineering(sentence_df=sentence_df,
+                                                            input_column=preprocessing_column,
+                                                            output_column=feature_column,
+                                                            model_param=model_param)
 
-                # 訓練時將字典存到fs, DL預測時必須使用
-                model.save_transformer(feature_transformer_path, feature_transformer_name)
+                    logger.debug('save_transformer')
 
-                logger.debug('data_split')
+                    # 訓練時將字典存到fs, DL預測時必須使用
+                    model.save_transformer(feature_transformer_path, feature_transformer_name)
 
-                # target(EX: weather)必須轉成index(EX:0), model才能使用, 保留對應的mapping將來轉回target文字(0 -> weather)
-                x_train, y_train, _, test_df = model.data_split(sentence_df=sentence_df,
-                                                                feature_column=feature_column,
-                                                                target_index_column=target_index_column,
-                                                                train_test_split_size=train_test_split_size,
-                                                                one_skill=one_skill,
-                                                                other_skill_id=other_skill_id,
-                                                                model_param=model_param)
+                    logger.debug('data_split')
 
-                # logger.debug('sentence_df')
-                # logger.debug(sentence_df)
+                    # target(EX: weather)必須轉成index(EX:0), model才能使用, 保留對應的mapping將來轉回target文字(0 -> weather)
+                    x_train, y_train, _, test_df = model.data_split(sentence_df=sentence_df,
+                                                                    feature_column=feature_column,
+                                                                    target_index_column=target_index_column,
+                                                                    train_test_split_size=train_test_split_size,
+                                                                    one_skill=one_skill,
+                                                                    other_skill_id=other_skill_id,
+                                                                    model_param=model_param)
 
-                # logger.debug(model.mapping)
-                # logger.debug(model.mapping_name)
+                    # logger.debug('sentence_df')
+                    # logger.debug(sentence_df)
 
-                num_classes = model.get_num_classes()
-                # logger.debug(num_classes)
+                    # logger.debug(model.mapping)
+                    # logger.debug(model.mapping_name)
 
-                # 前處理後才知道的參數
-                model_param['num_classes'] = num_classes
-                # logger.debug(model_param.num_classes)
+                    num_classes = model.get_num_classes()
+                    # logger.debug(num_classes)
 
-                """
-                build model : model參數與model合併
-                """
-                logger.debug('============ build_model ============')
-                model.build_model(model_param)
+                    # 前處理後才知道的參數
+                    model_param['num_classes'] = num_classes
+                    # logger.debug(model_param.num_classes)
 
-                # 訓練參數轉成json保存(object >> dict >> json)
-                # algorithm_param_json = json.dumps(model.model_param.__dict__) #class轉dict
-                algorithm_param_json = json.dumps(model.model_param)
+                    """
+                    build model : model參數與model合併
+                    """
+                    logger.debug('============ build_model ============')
+                    model.build_model(model_param)
 
-                # 訓練模型時, 新增訓練紀錄, 狀態爲 TRAIN 訓練中
+                    # 訓練參數轉成json保存(object >> dict >> json)
+                    # algorithm_param_json = json.dumps(model.model_param.__dict__) #class轉dict
+                    algorithm_param_json = json.dumps(model.model_param)
 
-                logger.debug('============ insert_train_log ============')
+                    # 訓練模型時, 新增訓練紀錄, 狀態爲 TRAIN 訓練中
 
-                nfs_model_id = robot_id + "+" + model_id + model_param['model_sub_name']
-                nfs_tokenizer_id = robot_id + "+" + model_id + model_param['tokenizer_sub_name']
+                    logger.debug('============ insert_train_log ============')
 
-                logger.debug('nfs_model_id : {}'.format(nfs_model_id))
-                logger.debug('nfs_tokenizer_id : {}'.format(nfs_tokenizer_id))
+                    nfs_model_id = robot_id + "+" + model_id + model_param['model_sub_name']
+                    nfs_tokenizer_id = robot_id + "+" + model_id + model_param['tokenizer_sub_name']
 
-                HelperIntentModelUtility.update_train_log_by_column(robot_id=robot_id,
-                                                                    model_id=model_id,
-                                                                    algorithm_param=algorithm_param_json,
-                                                                    algorithm_type=model.algorithm_type,
-                                                                    tokenizer_id=feature_transformer_name,
-                                                                    mapping=model.mapping,
-                                                                    mapping_name=model.mapping_name,
-                                                                    status="TRAIN",
-                                                                    nfs_model_id=nfs_model_id,
-                                                                    nfs_tokenizer_id=nfs_tokenizer_id)
+                    logger.debug('nfs_model_id : {}'.format(nfs_model_id))
+                    logger.debug('nfs_tokenizer_id : {}'.format(nfs_tokenizer_id))
 
-                try:
+                    HelperIntentModelUtility.update_train_log_by_column(robot_id=robot_id,
+                                                                        model_id=model_id,
+                                                                        algorithm_param=algorithm_param_json,
+                                                                        algorithm_type=model.algorithm_type,
+                                                                        tokenizer_id=feature_transformer_name,
+                                                                        mapping=model.mapping,
+                                                                        mapping_name=model.mapping_name,
+                                                                        status_debug="TRAIN",
+                                                                        nfs_model_id=nfs_model_id,
+                                                                        nfs_tokenizer_id=nfs_tokenizer_id)
+
+
 
                     logger.debug('============ train_model_start ============')
 
@@ -289,7 +308,7 @@ if __name__ == '__main__':
                     """
                     HelperIntentModelUtility.update_train_log_by_column(robot_id=robot_id,
                                                                         model_id=model_id,
-                                                                        status="EVALUATE")
+                                                                        status_debug="EVALUATE")
 
                     predict_df = model.predict_result(test_df=test_df,
                                                       sentence_column=sentence_column,
@@ -375,25 +394,6 @@ if __name__ == '__main__':
                     logger.debug('recall: {0:0.4f}'.format(recall_score))
                     logger.debug('f1_score: {0:0.4f}'.format(f1_score))
 
-                except TypeError as e:
-
-                    # 訓練模型失敗, 將train_log刪除
-                    HelperIntentModelUtility.delete_train_log(robot_id=robot_id,
-                                                              model_id_list=[model_id],
-                                                              modify_user=modify_user)
-
-                    utility_logger = UtilityLogger()
-                    msg = utility_logger.except_error_msg(sys.exc_info())
-                    logger.error(msg)
-                    log_id = "MQ_IntentModelTrainBert"
-                    utility_logger.save_log(MSSQL_DB, HELPER_ERROR_LOG_TABLE, log_id, msg)
-
-                    # return jsonify(code=StateCode.Unexpected,
-                    #                data=[],
-                    #                message=msg
-                    #                ), 999
-
-                try:
                     """
                     持久化實體檔案
                     1. 模型
@@ -404,7 +404,7 @@ if __name__ == '__main__':
                     """
                     HelperIntentModelUtility.update_train_log_by_column(robot_id=robot_id,
                                                                         model_id=model_id,
-                                                                        status="SAVE")
+                                                                        status_debug="SAVE")
 
                     save_model_path = Get_MyEnv().env_fs_model_path + "intent/"
                     model_name = robot_id + "+" + model_id
@@ -502,129 +502,208 @@ if __name__ == '__main__':
                     # }
                     plt_img_url_json = json.dumps(plt_img_url_dict, ensure_ascii=False)
 
-                except IOError as e:
+                    # 回傳驗證錯誤句子
+                    error_evaluate_list = []
+                    error_evaluate_sentence = []
+                    for index, row in error_df.iterrows():
 
-                    # 訓練模型失敗, 將train_log刪除
-                    HelperIntentModelUtility.delete_train_log(robot_id=robot_id,
-                                                              model_id_list=[model_id],
-                                                              modify_user=modify_user)
+                        # 其他類驗證錯誤不顯示
+                        if one_skill and row.answer_id == other_skill_id:
+                            continue
 
-                    utility_logger = UtilityLogger()
-                    msg = utility_logger.except_error_msg(sys.exc_info())
-                    logger.error(msg)
-                    log_id = "MQ_IntentModelTrainBert"
-                    utility_logger.save_log(MSSQL_DB, HELPER_ERROR_LOG_TABLE, log_id, msg)
+                        error = dict(
+                            sentence=row.sentence,
+                            predict_id=row.y_predict_id,
+                            answer_id=row.answer_id,
+                        )
+                        error_evaluate_list.append(error)
+                        error_evaluate_sentence.append(row.sentence)
 
-                    # return jsonify(code=StateCode.Unexpected,
-                    #                data=[],
-                    #                message=msg
-                    #                ), 999
-
-                # TODO: 非同步 following task
-
-                # 將model狀態 status=TRAIN to N
-                HelperIntentModelUtility.update_train_log_by_column(robot_id=robot_id,
-                                                                    model_id=model_id,
-                                                                    status="N"
-                                                                    )
-
-                # 回傳驗證錯誤句子
-                error_evaluate_list = []
-                error_evaluate_sentence = []
-                for index, row in error_df.iterrows():
-
-                    # 其他類驗證錯誤不顯示
-                    if one_skill and row.answer_id == other_skill_id:
-                        continue
-
-                    error = dict(
-                        sentence=row.sentence,
-                        predict_id=row.y_predict_id,
-                        answer_id=row.answer_id,
+                    # 保存驗證錯誤句子
+                    sentence = list(error_df.sentence)
+                    predict_id = list(error_df.y_predict_id)
+                    answer_id = list(error_df.answer_id)
+                    save_error_evaluate = dict(
+                        sentence=sentence,
+                        predict_id=predict_id,
+                        answer_id=answer_id,
                     )
-                    error_evaluate_list.append(error)
-                    error_evaluate_sentence.append(row.sentence)
+                    # 轉成json保存
+                    save_error_evaluate_json = json.dumps(save_error_evaluate)
+                    # logger.debug(save_error_evaluate_json)
 
-                # 保存驗證錯誤句子
-                sentence = list(error_df.sentence)
-                predict_id = list(error_df.y_predict_id)
-                answer_id = list(error_df.answer_id)
-                save_error_evaluate = dict(
-                    sentence=sentence,
-                    predict_id=predict_id,
-                    answer_id=answer_id,
-                )
-                # 轉成json保存
-                save_error_evaluate_json = json.dumps(save_error_evaluate)
-                # logger.debug(save_error_evaluate_json)
+                    # logger.debug('@@@@@@ 3 insert_test_log over')
 
-                # logger.debug('@@@@@@ 3 insert_test_log over')
+                    # HelperIntentModelUtility.insert_test_log(robot_id=robot_id,
+                    #                                          model_id=model_id,
+                    #                                          total_count=total_count,
+                    #                                          correct_count=correct_count,
+                    #                                          accuracy_score=acc_score,
+                    #                                          precision_score=precision_score,
+                    #                                          recall_score=recall_score,
+                    #                                          f1_score=f1_score,
+                    #                                          img=plt_img_url_json,
+                    #                                          modify_user=modify_user,
+                    #                                          error_evaluate_sentence=save_error_evaluate_json
+                    #                                          )
 
-                HelperIntentModelUtility.insert_test_log(robot_id=robot_id,
-                                                         model_id=model_id,
-                                                         total_count=total_count,
-                                                         correct_count=correct_count,
-                                                         accuracy_score=acc_score,
-                                                         precision_score=precision_score,
-                                                         recall_score=recall_score,
-                                                         f1_score=f1_score,
-                                                         img=plt_img_url_json,
-                                                         modify_user=modify_user,
-                                                         error_evaluate_sentence=save_error_evaluate_json
-                                                         )
+                    HelperIntentModelUtility.update_test_log(robot_id=robot_id,
+                                                             model_id=model_id,
+                                                             total_count=total_count,
+                                                             correct_count=correct_count,
+                                                             accuracy_score=acc_score,
+                                                             precision_score=precision_score,
+                                                             recall_score=recall_score,
+                                                             f1_score=f1_score,
+                                                             img=plt_img_url_json,
+                                                             modify_user=modify_user,
+                                                             error_evaluate_sentence=save_error_evaluate_json
+                                                             )
 
-                # logger.debug('@@@@@@ 3 insert_test_log over')
+                    # logger.debug('@@@@@@ 3 insert_test_log over')
 
-                # 此次訓練語句紀錄
-                if one_skill:
-                    sentence_df = sentence_df[sentence_df['skill_id'] != other_skill_id]
+                    # 此次訓練語句紀錄
+                    if one_skill:
+                        sentence_df = sentence_df[sentence_df['skill_id'] != other_skill_id]
 
-                cql_list = []
-                param_tuple_list = []
-                for index, row in sentence_df.iterrows():
-                    cql, param_tuple = HelperIntentModelUtility.insert_train_sentence_log_get_cql(robot_id=robot_id,
-                                                                                                  model_id=model_id,
-                                                                                                  skill_id=row[
-                                                                                                      'skill_id'],
-                                                                                                  sentence_id=row[
-                                                                                                      'sentence_id'],
-                                                                                                  sentence=row[
-                                                                                                      'sentence'],
-                                                                                                  cut_sentence=row[
-                                                                                                      'cut_words'],
-                                                                                                  create_date=row[
-                                                                                                      'create_date_x']
-                                                                                                  )
-                    cql_list.append(cql)
-                    param_tuple_list.append(param_tuple)
+                    """
+                    queue error >> retrain
+                    check sentence_log is existed
+                    """
+                    sentence_log_df = HelperIntentModelUtility.query_train_sentence_log(robot_id=robot_id,
+                                                                                        model_id=model_id)
 
-                    # HelperIntentModelUtility.insert_train_sentence_log(robot_id=robot_id,
-                    #                                                    model_id=model_id,
-                    #                                                    skill_id=row['skill_id'],
-                    #                                                    sentence_id=row['sentence_id'],
-                    #                                                    sentence=row['sentence'],
-                    #                                                    cut_sentence=row['cut_words'],
-                    #                                                    create_date=row['create_date_x']
-                    #                                                    )
+                    cql_list = []
+                    param_tuple_list = []
+                    if len(sentence_log_df) > 0:
+                        pass
 
-                if len(cql_list) > 0:
-                    # HelperIntentModelUtility.exec_cql_transations(cql_list)
-                    HelperIntentModelUtility.exec_cql_transations_param_tuple(cql_list, param_tuple_list)
+                    else:
 
-                # data = dict(
-                #     accuracy_score=acc_score,
-                #     precision_score=recall_score,
-                #     recall_score=recall_score,
-                #     f1_score=f1_score,
-                #     error_evaluate_sentence=error_evaluate_list
-                # )
+                        for index, row in sentence_df.iterrows():
+                            cql, param_tuple = HelperIntentModelUtility.insert_train_sentence_log_get_cql(robot_id=robot_id,
+                                                                                                          model_id=model_id,
+                                                                                                          skill_id=row[
+                                                                                                              'skill_id'],
+                                                                                                          sentence_id=row[
+                                                                                                              'sentence_id'],
+                                                                                                          sentence=row[
+                                                                                                              'sentence'],
+                                                                                                          cut_sentence=row[
+                                                                                                              'cut_words'],
+                                                                                                          create_date=row[
+                                                                                                              'create_date_x']
+                                                                                                          )
+                            cql_list.append(cql)
+                            param_tuple_list.append(param_tuple)
 
-                # return jsonify(code=StateCode.Success,
-                #                message="success",
-                #                data=[data]
-                #                )
+                            # HelperIntentModelUtility.insert_train_sentence_log(robot_id=robot_id,
+                            #                                                    model_id=model_id,
+                            #                                                    skill_id=row['skill_id'],
+                            #                                                    sentence_id=row['sentence_id'],
+                            #                                                    sentence=row['sentence'],
+                            #                                                    cut_sentence=row['cut_words'],
+                            #                                                    create_date=row['create_date_x']
+                            #                                                    )
+
+                    if len(cql_list) > 0:
+                        # HelperIntentModelUtility.exec_cql_transations(cql_list)
+                        HelperIntentModelUtility.exec_cql_transations_param_tuple(cql_list, param_tuple_list)
+
+                    # data = dict(
+                    #     accuracy_score=acc_score,
+                    #     precision_score=recall_score,
+                    #     recall_score=recall_score,
+                    #     f1_score=f1_score,
+                    #     error_evaluate_sentence=error_evaluate_list
+                    # )
+
+                    # return jsonify(code=StateCode.Success,
+                    #                message="success",
+                    #                data=[data]
+                    #                )
+
+                    """
+                    run predict container
+                    
+                    if this container start successful, status will change to 'N'. model ui will unlock
+                    """
+                    HelperIntentModelUtility.update_train_log_by_column(robot_id=robot_id,
+                                                                        model_id=model_id,
+                                                                        status_debug="DOCKER_RUN")
+
+                    """
+                    control container run at different VM(choose less port in use)
+                    """
+                    ready_container_ip = Get_MyEnv().env_predict_container_ip
+                    docker_port = Get_MyEnv().env_docker_port
+
+                    model_port_df = HelperIntentModelUtility.query_model_port(robot_id=robot_id,
+                                                                              model_id=model_id)
+                    run_ips = list(set(model_port_df['ip']))
+                    # env_predict_container_ip = "192.168.92.37;192.168.92.38;192.168.92.39"
+                    ready_ips = ready_container_ip.split(';')
+                    diff_ips = list(set(ready_ips) - set(run_ips))
+
+                    # logger.debug(diff_ips)
+                    model_port_df = model_port_df.append(pd.DataFrame({
+                        "robot_id": diff_ips,
+                        "model_id": diff_ips,
+                        "ip": diff_ips
+                    }))
+
+                    group_df = model_port_df.groupby(["ip"]).size().sort_values(ascending=True).reset_index(name='count')
+                    # logger.debug(group_df)
+                    container_ip = group_df["ip"][0]
+
+                    HelperIntentModelUtility.run_bert_container(robot_id=robot_id,
+                                                                model_id=model_id,
+                                                                container_ip=container_ip,
+                                                                docker_port=docker_port)
+
+        except:
+
+            # # 訓練模型失敗, 將train_log刪除
+            # HelperIntentModelUtility.delete_train_log(robot_id=robot_id,
+            #                                           model_id_list=[model_id],
+            #                                           modify_user=modify_user)
+
+            logger.error("train exception !!!!!!!!!")
+            utility_logger = UtilityLogger()
+            msg = utility_logger.except_error_msg(sys.exc_info())
+            logger.error(msg)
+
+            """
+            basic_nack, requeue=False
+            """
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+
+
+        """
+        basic_ack
+        """
+        ch.basic_ack(delivery_tag=method.delivery_tag)
 
 
     # queue啓動
     queue_id = Get_MyEnv().env_mq_name_intent_train_bert_queue
-    mq.start_consuming(queue_id, callback=train)
+
+    mq.start_consuming(queue_id,
+                       callback=train,
+                       auto_ack=False,
+                       durable=True)
+
+    # """
+    # AuotAck = False
+    # """
+    # conn = mq.get_connect()
+    # channel = conn.channel()
+    # channel.queue_declare(queue=queue_id, durable=True)
+    # channel.basic_consume(on_message_callback=train,
+    #                       queue=queue_id,
+    #                       auto_ack=False)
+    # channel.basic_qos(prefetch_count=1)
+    #
+    # print(' [*] Waiting for messages. To exit press CTRL+C')
+    # channel.start_consuming()
+

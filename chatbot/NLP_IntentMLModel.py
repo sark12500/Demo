@@ -41,7 +41,6 @@ class IntentMLModel:
         self.logger.setLevel(logging.DEBUG)
 
         config = Get_HelperConfig()
-        self.HELPER_KEYSPACE = Get_MyEnv().env_helper_keyspace
         self.HELPER_ERROR_LOG_TABLE = config.HELPER_ERROR_LOG_TABLE
         self.HELPER_INTENT_MODEL_TABLE = config.HELPER_INTENT_MODEL_TABLE
         self.HELPER_INTENT_TRAIN_SENTENCE_TABLE = config.HELPER_INTENT_TRAIN_SENTENCE_TABLE
@@ -117,6 +116,8 @@ class IntentMLModel:
                                                          js=jieba,
                                                          split_word=" ")
 
+        # print(sentence_df)
+
         return sentence_df
 
     def mapping_setting(self, sentence_df, input_column, output_column):
@@ -172,12 +173,11 @@ class IntentMLModel:
         :param model_param:
         :return:
         """
-        # print("feature_engineering")
 
         method = method.lower()
         cut_words = sentence_df[input_column]
 
-        # print(cut_words)
+        print(cut_words)
 
         if method == 'tfidf':
             """
@@ -188,7 +188,7 @@ class IntentMLModel:
             相反，IT相關主題使用「python」，TF-IDF認為「python」是識別主題和類別的重要特徵詞
             """
 
-            vectorizer = TfidfVectorizer(norm=None, stop_words=None, token_pattern=r"(?u)\b\w+\b")
+            vectorizer = TfidfVectorizer(norm=None, stop_words=None)
 
             # 預測時須將新的單字加入重新計算
             if self.transformer:
@@ -373,7 +373,7 @@ class IntentMLModel:
         x_test = np.array(test_df[feature_column].tolist())
         # print(x_test)
 
-        # self.logger.debug(x_test)=
+        # self.logger.debug(x_test)
         self.logger.debug(self.get_model())
         y_predict_probability = self.get_model().predict_proba(x_test)
         self.logger.debug('self.get_model() ml')

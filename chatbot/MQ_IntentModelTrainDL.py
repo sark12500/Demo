@@ -80,16 +80,18 @@ if __name__ == '__main__':
         sentence_set_id = body['sentence_set_id']
         algorithm = body['algorithm']
         modify_user = body['modify_user']
+        check_skill_label = body.get('check_skill_label', True)
 
         # 向量長度 - 取最長的單字向量長度
         sentence_max_len = body.get('sentence_max_len', 10)
         # 訓練測試切割
         train_test_split_size = body.get('train_test_split_size', 0.8)
 
-        # 接到queue的event status = GET_QUEUE
+        # 接到queue的event 開始進行前處理 PREPROCESSING
         HelperIntentModelUtility.update_train_log_by_column(robot_id=robot_id,
                                                             model_id=model_id,
-                                                            status="GET_QUEUE")
+                                                            status="TRAIN",
+                                                            status_debug="PREPROCESSING")
 
         sentence_df = HelperIntentModelUtility.query_train_sentence(robot_id=robot_id,
                                                                     sentence_set_id=sentence_set_id)
@@ -105,11 +107,19 @@ if __name__ == '__main__':
             session = Session(graph=graph)
             with session.as_default():
 
-                # 組出skill_name
-                robot_skill_df = HelperIntentModelUtility.query_robot_skill(robot_id=robot_id)
-                # 合併查詢
-                sentence_df = pd.merge(sentence_df, robot_skill_df, how='inner', on=['skill_id'])
-                sentence_df = sentence_df[['skill_id', 'skill_name', 'sentence_id', 'sentence', 'create_date_x']]
+                if check_skill_label:
+                    # skill label must mapping
+                    # 組出skill_name
+                    robot_skill_df = HelperIntentModelUtility.query_robot_skill(robot_id=robot_id)
+                    # 合併查詢
+                    sentence_df = pd.merge(sentence_df, robot_skill_df, how='inner', on=['skill_id'])
+                    sentence_df = sentence_df[['skill_id', 'skill_name', 'sentence_id', 'sentence', 'create_date_x']]
+                else:
+
+                    # skill label no need mapping
+                    sentence_df['create_date_x'] = sentence_df['create_date']
+                    sentence_df['skill_name'] = sentence_df['skill_id']
+                    sentence_df = sentence_df[['skill_id', 'skill_name', 'sentence_id', 'sentence', 'create_date_x']]
 
                 # 只有一個skill, 使用語料庫句子, 組成兩個句子一起訓練
                 one_skill = False
@@ -256,6 +266,9 @@ if __name__ == '__main__':
                                                     output_column=target_index_column)
 
                 logger.debug('feature_engineering')
+                HelperIntentModelUtility.update_train_log_by_column(robot_id=robot_id,
+                                                                    model_id=model_id,
+                                                                    status_debug="FEATURE_ENGINEERING")
 
                 # 特徵工程
                 feature_transformer_path = Get_MyEnv().env_fs_model_path + "intent/"
@@ -321,265 +334,265 @@ if __name__ == '__main__':
                                                                     tokenizer_id=feature_transformer_name,
                                                                     mapping=model.mapping,
                                                                     mapping_name=model.mapping_name,
-                                                                    status="TRAIN",
+                                                                    status_debug="TRAIN",
                                                                     nfs_model_id=nfs_model_id,
                                                                     nfs_tokenizer_id=nfs_tokenizer_id)
 
-                # TODO: TRAIN 開始就回前端 , 非同步去呼叫train model API 不要等
-                try:
+                # try:
 
-                    logger.debug('============ train_model_start ============')
+                logger.debug('============ train_model_start ============')
+
+                """
+                訓練模型
+                """
+                model.train_model(x_train,
+                                  y_train)
+
+                """
+                model evaluate
+                直接把訓練句丟model預測, 切出驗證資料會使訓練資料過少(TODO: 如果能有夠多句子或自動生成句子就可以切)
+                並把結果計算統計值 EX : accuracy, f1-score 用來參考
+                """
+                HelperIntentModelUtility.update_train_log_by_column(robot_id=robot_id,
+                                                                    model_id=model_id,
+                                                                    status_debug="EVALUATE")
+
+                predict_df = model.predict_result(test_df=test_df,
+                                                  sentence_column=sentence_column,
+                                                  feature_column=feature_column,
+                                                  target_column=target_column,
+                                                  target_index_column=target_index_column,
+                                                  model_param=model_param)
+
+                y_predict_name = predict_df['y_predict_name']
+
+                logger.debug("----- 統計值 -----")
+                logger.debug(predict_df)
+
+                answer = predict_df['answer']
+                predict = predict_df['y_predict']
+
+                # 預測錯誤
+                logger.debug("----- 分類錯誤的類別 -----")
+
+                if one_skill:
+                    # 單一技能設定門檻值當成錯誤分類
+                    # error_df_1 = predict_df[predict_df['y_predict'] != one_skill_id]
+                    error_df_1 = predict_df[predict_df['y_predict'] != predict_df['answer']]
+                    error_df_2 = predict_df[predict_df['y_predict'] == predict_df['answer']]
+
+                    default_one_skill_confidence = 0.9
+                    greate_than_default_confidece = []
+                    for index, row in error_df_2.iterrows():
+                        if max(row["y_predict_probability"]) >= default_one_skill_confidence:
+                            greate_than_default_confidece.append(True)
+                        else:
+                            greate_than_default_confidece.append(False)
+
+                    error_df_2['greate_than_default_confidece'] = greate_than_default_confidece
+                    # 信心值過低都算錯
+                    error_df_2 = error_df_2[error_df_2['greate_than_default_confidece'] == False]
+                    error_df = error_df_1.append(error_df_2)
+
+                else:
+                    # 多類別
+                    error_df = predict_df[predict_df['y_predict'] != predict_df['answer']]
+
+                # logger.debug(error_df)
+
+                total_count = len(test_df)
+                error_count = len(error_df)
+                correct_count = total_count - error_count
+                # scikit-learn提供的accuracy_score, 會在分母乘上與權重
+                # acc_score = accuracy_score(answer, predict)
+                # 自己計算的accuracy_score
+                acc_score = float(correct_count) / total_count
+                # acc_score = float(
+                #     sum(np.array(sentence_df.skill_id) == np.argmax(y_predict_probability, axis=1))) / len(
+                #     sentence_df)
+                logger.debug('total_count: {}'.format(total_count))
+                logger.debug('correct_count: {}'.format(correct_count))
+
+                if one_skill:
+                    # 無數值
+                    precision_score, recall_score, f1_score = -1, -1, -1
+
+                else:
+
+                    # confusion matrix
+                    logger.debug("----- confusion matrix -----")
+                    logger.debug(pd.crosstab(np.array(y_predict_name), np.array(test_df.skill_id),
+                                             rownames=['predict'], colnames=['answer']))
 
                     """
-                    訓練模型
+                    accuracy.precision.recall.f1_score
                     """
-                    model.train_model(x_train,
-                                      y_train)
+                    precision_score, recall_score, f1_score, support = precision_recall_fscore_support(answer,
+                                                                                                       predict,
+                                                                                                       average='macro')
 
-                    """
-                    model evaluate
-                    直接把訓練句丟model預測, 切出驗證資料會使訓練資料過少(TODO: 如果能有夠多句子或自動生成句子就可以切)
-                    並把結果計算統計值 EX : accuracy, f1-score 用來參考
-                    """
-                    HelperIntentModelUtility.update_train_log_by_column(robot_id=robot_id,
-                                                                        model_id=model_id,
-                                                                        status="EVALUATE")
+                acc_score = float('%.4f' % acc_score)
+                precision_score = float('%.4f' % precision_score)
+                recall_score = float('%.4f' % recall_score)
+                f1_score = float('%.4f' % f1_score)
 
-                    predict_df = model.predict_result(test_df=test_df,
-                                                      sentence_column=sentence_column,
-                                                      feature_column=feature_column,
-                                                      target_column=target_column,
-                                                      target_index_column=target_index_column,
-                                                      model_param=model_param)
+                logger.debug('accuracy: {0:0.4f}'.format(acc_score))
+                logger.debug('precision: {0:0.4f}'.format(precision_score))
+                logger.debug('recall: {0:0.4f}'.format(recall_score))
+                logger.debug('f1_score: {0:0.4f}'.format(f1_score))
 
-                    y_predict_name = predict_df['y_predict_name']
+                # except TypeError as e:
+                #
+                #     # 訓練模型失敗, 將train_log刪除
+                #     HelperIntentModelUtility.delete_train_log(robot_id=robot_id,
+                #                                               model_id_list=[model_id],
+                #                                               modify_user=modify_user)
+                #
+                #     utility_logger = UtilityLogger()
+                #     msg = utility_logger.except_error_msg(sys.exc_info())
+                #     logger.error(msg)
+                #     log_id = "MQ_IntentModelTrainDL"
+                #     utility_logger.save_log(MSSQL_DB, HELPER_ERROR_LOG_TABLE, log_id, msg)
+                #
+                #     # return jsonify(code=StateCode.Unexpected,
+                #     #                data=[],
+                #     #                message=msg
+                #     #                ), 999
 
-                    logger.debug("----- 統計值 -----")
-                    logger.debug(predict_df)
+                # try:
+                """
+                持久化實體檔案
+                1. 模型
+                2. 評估 - ROC圖
+                3. 評估 - confusion_matrix圖
+                4. 評估 - PRC圖
+                5. 模型 - 訓練過程
+                """
+                HelperIntentModelUtility.update_train_log_by_column(robot_id=robot_id,
+                                                                    model_id=model_id,
+                                                                    status_debug="SAVE")
 
-                    answer = predict_df['answer']
-                    predict = predict_df['y_predict']
+                save_model_path = Get_MyEnv().env_fs_model_path + "intent/"
+                model_name = robot_id + "+" + model_id
+                model.save_model(save_model_path, model_name)
 
-                    # 預測錯誤
-                    logger.debug("----- 分類錯誤的類別 -----")
+                plt_name = robot_id + "+" + model_id + ".png"
 
-                    if one_skill:
-                        # 單一技能設定門檻值當成錯誤分類
-                        # error_df_1 = predict_df[predict_df['y_predict'] != one_skill_id]
-                        error_df_1 = predict_df[predict_df['y_predict'] != predict_df['answer']]
-                        error_df_2 = predict_df[predict_df['y_predict'] == predict_df['answer']]
+                train_history_plt = model.train_history_plt(train='loss',
+                                                            validation='val_loss')
+                if train_history_plt:
+                    train_history_path = Get_MyEnv().env_fs_image_path + "intent/train_history/" + plt_name
+                    train_history_plt_url = Get_MyEnv().env_fs_image_url + "intent/train_history/" + plt_name
+                    train_history_plt.savefig(train_history_path,
+                                              bbox_inches='tight')
+                else:
+                    train_history_plt_url = ''
 
-                        default_one_skill_confidence = 0.9
-                        greate_than_default_confidece = []
-                        for index, row in error_df_2.iterrows():
-                            if max(row["y_predict_probability"]) >= default_one_skill_confidence:
-                                greate_than_default_confidece.append(True)
-                            else:
-                                greate_than_default_confidece.append(False)
+                if one_skill == False:
 
-                        error_df_2['greate_than_default_confidece'] = greate_than_default_confidece
-                        # 信心值過低都算錯
-                        error_df_2 = error_df_2[error_df_2['greate_than_default_confidece'] == False]
-                        error_df = error_df_1.append(error_df_2)
+                    # logger.debug(predict_df)
 
-                    else:
-                        # 多類別
-                        error_df = predict_df[predict_df['y_predict'] != predict_df['answer']]
+                    cm_plt = skplt.metrics.plot_confusion_matrix(list(predict_df['answer_id']),
+                                                                 list(predict_df['y_predict_id']))
 
-                    # logger.debug(error_df)
+                    cm_plt_path = Get_MyEnv().env_fs_image_path + "intent/confusion_matrix/" + plt_name
+                    cm_plt_url = Get_MyEnv().env_fs_image_url + "intent/confusion_matrix/" + plt_name
+                    cm_plt.get_figure().savefig(cm_plt_path,
+                                                bbox_inches='tight')
 
-                    total_count = len(test_df)
-                    error_count = len(error_df)
-                    correct_count = total_count - error_count
-                    # scikit-learn提供的accuracy_score, 會在分母乘上與權重
-                    # acc_score = accuracy_score(answer, predict)
-                    # 自己計算的accuracy_score
-                    acc_score = float(correct_count) / total_count
-                    # acc_score = float(
-                    #     sum(np.array(sentence_df.skill_id) == np.argmax(y_predict_probability, axis=1))) / len(
-                    #     sentence_df)
-                    logger.debug('total_count: {}'.format(total_count))
-                    logger.debug('correct_count: {}'.format(correct_count))
+                    # logger.debug(list(predict_df['answer_id']))
+                    # logger.debug(list(predict_df['y_predict_probability']))
 
-                    if one_skill:
-                        # 無數值
-                        precision_score, recall_score, f1_score = -1, -1, -1
+                    roc_plt = skplt.metrics.plot_roc(list(predict_df['answer_id']),
+                                                     list(predict_df['y_predict_probability']))
 
-                    else:
+                    roc_plt_path = Get_MyEnv().env_fs_image_path + "intent/roc/" + plt_name
+                    roc_plt_url = Get_MyEnv().env_fs_image_url + "intent/roc/" + plt_name
 
-                        # confusion matrix
-                        logger.debug("----- confusion matrix -----")
-                        logger.debug(pd.crosstab(np.array(y_predict_name), np.array(test_df.skill_id),
-                                                 rownames=['predict'], colnames=['answer']))
+                    roc_plt.get_figure().savefig(roc_plt_path,
+                                                 bbox_inches='tight')
 
-                        """
-                        accuracy.precision.recall.f1_score
-                        """
-                        precision_score, recall_score, f1_score, support = precision_recall_fscore_support(answer,
-                                                                                                           predict,
-                                                                                                           average='macro')
+                    prc_plt = skplt.metrics.plot_precision_recall_curve(list(predict_df['answer_id']),
+                                                                        list(predict_df[
+                                                                                 'y_predict_probability']),
+                                                                        cmap='nipy_spectral')
 
-                    acc_score = float('%.4f' % acc_score)
-                    precision_score = float('%.4f' % precision_score)
-                    recall_score = float('%.4f' % recall_score)
-                    f1_score = float('%.4f' % f1_score)
+                    prc_plt_path = Get_MyEnv().env_fs_image_path + "intent/prc/" + plt_name
+                    prc_plt_url = Get_MyEnv().env_fs_image_url + "intent/prc/" + plt_name
+                    prc_plt.get_figure().savefig(prc_plt_path,
+                                                 bbox_inches='tight')
 
-                    logger.debug('accuracy: {0:0.4f}'.format(acc_score))
-                    logger.debug('precision: {0:0.4f}'.format(precision_score))
-                    logger.debug('recall: {0:0.4f}'.format(recall_score))
-                    logger.debug('f1_score: {0:0.4f}'.format(f1_score))
-
-                except TypeError as e:
-
-                    # 訓練模型失敗, 將train_log刪除
-                    HelperIntentModelUtility.delete_train_log(robot_id=robot_id,
-                                                              model_id_list=[model_id],
-                                                              modify_user=modify_user)
-
-                    utility_logger = UtilityLogger()
-                    msg = utility_logger.except_error_msg(sys.exc_info())
-                    logger.error(msg)
-                    log_id = "MQ_IntentModelTrainDL"
-                    utility_logger.save_log(MSSQL_DB, HELPER_ERROR_LOG_TABLE, log_id, msg)
-
-                    # return jsonify(code=StateCode.Unexpected,
-                    #                data=[],
-                    #                message=msg
-                    #                ), 999
-
-                try:
-                    """
-                    持久化實體檔案
-                    1. 模型
-                    2. 評估 - ROC圖
-                    3. 評估 - confusion_matrix圖
-                    4. 評估 - PRC圖
-                    5. 模型 - 訓練過程
-                    """
-                    HelperIntentModelUtility.update_train_log_by_column(robot_id=robot_id,
-                                                                        model_id=model_id,
-                                                                        status="SAVE")
-
-                    save_model_path = Get_MyEnv().env_fs_model_path + "intent/"
-                    model_name = robot_id + "+" + model_id
-                    model.save_model(save_model_path, model_name)
-
-                    plt_name = robot_id + "+" + model_id + ".png"
-
-                    train_history_plt = model.train_history_plt(train='loss',
-                                                                validation='val_loss')
-                    if train_history_plt:
-                        train_history_path = Get_MyEnv().env_fs_image_path + "intent/train_history/" + plt_name
-                        train_history_plt_url = Get_MyEnv().env_fs_image_url + "intent/train_history/" + plt_name
-                        train_history_plt.savefig(train_history_path,
-                                                  bbox_inches='tight')
-                    else:
-                        train_history_plt_url = ''
-
-                    if one_skill == False:
-
-                        # logger.debug(predict_df)
-
-                        cm_plt = skplt.metrics.plot_confusion_matrix(list(predict_df['answer_id']),
-                                                                     list(predict_df['y_predict_id']))
-
-                        cm_plt_path = Get_MyEnv().env_fs_image_path + "intent/confusion_matrix/" + plt_name
-                        cm_plt_url = Get_MyEnv().env_fs_image_url + "intent/confusion_matrix/" + plt_name
-                        cm_plt.get_figure().savefig(cm_plt_path,
-                                                    bbox_inches='tight')
-
-                        # logger.debug(list(predict_df['answer_id']))
-                        # logger.debug(list(predict_df['y_predict_probability']))
-
-                        roc_plt = skplt.metrics.plot_roc(list(predict_df['answer_id']),
-                                                         list(predict_df['y_predict_probability']))
-
-                        roc_plt_path = Get_MyEnv().env_fs_image_path + "intent/roc/" + plt_name
-                        roc_plt_url = Get_MyEnv().env_fs_image_url + "intent/roc/" + plt_name
-
-                        roc_plt.get_figure().savefig(roc_plt_path,
-                                                     bbox_inches='tight')
-
-                        prc_plt = skplt.metrics.plot_precision_recall_curve(list(predict_df['answer_id']),
-                                                                            list(predict_df[
-                                                                                     'y_predict_probability']),
-                                                                            cmap='nipy_spectral')
-
-                        prc_plt_path = Get_MyEnv().env_fs_image_path + "intent/prc/" + plt_name
-                        prc_plt_url = Get_MyEnv().env_fs_image_url + "intent/prc/" + plt_name
-                        prc_plt.get_figure().savefig(prc_plt_path,
-                                                     bbox_inches='tight')
-
-                        prc_plt.cla()
-                        pie_plt_url = ''
+                    prc_plt.cla()
+                    pie_plt_url = ''
 
 
-                    else:
-                        cm_plt_url = ''
-                        roc_plt_url = ''
-                        prc_plt_url = ''
-                        labels = ['Correct', 'Others']
-                        sizes = [correct_count, error_count]
-                        colors = ['#66b3ff', '#ff9999']
-                        explode = (0, 0.1)
-                        fig1, ax1 = plt.subplots()
-                        ax1.pie(sizes,
-                                explode=explode, labels=labels, autopct='%1.1f%%',
-                                shadow=False, startangle=90, colors=colors)
-                        ax1.axis('equal')
-                        # plt.tight_layout()
+                else:
+                    cm_plt_url = ''
+                    roc_plt_url = ''
+                    prc_plt_url = ''
+                    labels = ['Correct', 'Others']
+                    sizes = [correct_count, error_count]
+                    colors = ['#66b3ff', '#ff9999']
+                    explode = (0, 0.1)
+                    fig1, ax1 = plt.subplots()
+                    ax1.pie(sizes,
+                            explode=explode, labels=labels, autopct='%1.1f%%',
+                            shadow=False, startangle=90, colors=colors)
+                    ax1.axis('equal')
+                    # plt.tight_layout()
 
-                        pie_plt_path = Get_MyEnv().env_fs_image_path + "intent/pie/" + plt_name
-                        pie_plt_url = Get_MyEnv().env_fs_image_url + "intent/pie/" + plt_name
-                        plt.savefig(pie_plt_path,
-                                    bbox_inches='tight')
-                        plt.cla()
+                    pie_plt_path = Get_MyEnv().env_fs_image_path + "intent/pie/" + plt_name
+                    pie_plt_url = Get_MyEnv().env_fs_image_url + "intent/pie/" + plt_name
+                    plt.savefig(pie_plt_path,
+                                bbox_inches='tight')
+                    plt.cla()
 
-                    plt_img_url_dict = {}
-                    if cm_plt_url != '':
-                        plt_img_url_dict.update({"Confusion Matrix": cm_plt_url})
-                    if train_history_plt_url != '':
-                        plt_img_url_dict.update({"TRAIN HISTORY": train_history_plt_url})
-                    if roc_plt_url != '':
-                        plt_img_url_dict.update({"ROC": roc_plt_url})
-                    if prc_plt_url != '':
-                        plt_img_url_dict.update({"PRC": prc_plt_url})
-                    if pie_plt_url != '':
-                        plt_img_url_dict.update({"PIE": pie_plt_url})
+                plt_img_url_dict = {}
+                if cm_plt_url != '':
+                    plt_img_url_dict.update({"Confusion Matrix": cm_plt_url})
+                if train_history_plt_url != '':
+                    plt_img_url_dict.update({"TRAIN HISTORY": train_history_plt_url})
+                if roc_plt_url != '':
+                    plt_img_url_dict.update({"ROC": roc_plt_url})
+                if prc_plt_url != '':
+                    plt_img_url_dict.update({"PRC": prc_plt_url})
+                if pie_plt_url != '':
+                    plt_img_url_dict.update({"PIE": pie_plt_url})
 
-                    # plt_img_url_dict = {
-                    #     "Confusion Matrix": cm_plt_url,
-                    #     "TRAIN HISTORY": train_history_plt_url,
-                    #     "ROC": roc_plt_url,
-                    #     "PRC": prc_plt_url,
-                    #     "PIE": pie_plt_url
-                    # }
-                    plt_img_url_json = json.dumps(plt_img_url_dict, ensure_ascii=False)
+                # plt_img_url_dict = {
+                #     "Confusion Matrix": cm_plt_url,
+                #     "TRAIN HISTORY": train_history_plt_url,
+                #     "ROC": roc_plt_url,
+                #     "PRC": prc_plt_url,
+                #     "PIE": pie_plt_url
+                # }
+                plt_img_url_json = json.dumps(plt_img_url_dict, ensure_ascii=False)
 
-                except IOError as e:
-
-                    # 訓練模型失敗, 將train_log刪除
-                    HelperIntentModelUtility.delete_train_log(robot_id=robot_id,
-                                                              model_id_list=[model_id],
-                                                              modify_user=modify_user)
-
-                    utility_logger = UtilityLogger()
-                    msg = utility_logger.except_error_msg(sys.exc_info())
-                    logger.error(msg)
-                    log_id = "MQ_IntentModelTrainDL"
-                    utility_logger.save_log(MSSQL_DB, HELPER_ERROR_LOG_TABLE, log_id, msg)
-
-                    # return jsonify(code=StateCode.Unexpected,
-                    #                data=[],
-                    #                message=msg
-                    #                ), 999
+                # except IOError as e:
+                #
+                #     # 訓練模型失敗, 將train_log刪除
+                #     HelperIntentModelUtility.delete_train_log(robot_id=robot_id,
+                #                                               model_id_list=[model_id],
+                #                                               modify_user=modify_user)
+                #
+                #     utility_logger = UtilityLogger()
+                #     msg = utility_logger.except_error_msg(sys.exc_info())
+                #     logger.error(msg)
+                #     log_id = "MQ_IntentModelTrainDL"
+                #     utility_logger.save_log(MSSQL_DB, HELPER_ERROR_LOG_TABLE, log_id, msg)
+                #
+                #     # return jsonify(code=StateCode.Unexpected,
+                #     #                data=[],
+                #     #                message=msg
+                #     #                ), 999
 
                 # TODO: 非同步 following task
 
                 # 將model狀態 status=TRAIN to N
                 HelperIntentModelUtility.update_train_log_by_column(robot_id=robot_id,
                                                                     model_id=model_id,
-                                                                    status="N"
+                                                                    status="N",
+                                                                    status_debug="N"
                                                                     )
 
                 # 回傳驗證錯誤句子
@@ -614,7 +627,20 @@ if __name__ == '__main__':
 
                 # logger.debug('@@@@@@ 3 insert_test_log over')
 
-                HelperIntentModelUtility.insert_test_log(robot_id=robot_id,
+                # HelperIntentModelUtility.insert_test_log(robot_id=robot_id,
+                #                                          model_id=model_id,
+                #                                          total_count=total_count,
+                #                                          correct_count=correct_count,
+                #                                          accuracy_score=acc_score,
+                #                                          precision_score=precision_score,
+                #                                          recall_score=recall_score,
+                #                                          f1_score=f1_score,
+                #                                          img=plt_img_url_json,
+                #                                          modify_user=modify_user,
+                #                                          error_evaluate_sentence=save_error_evaluate_json
+                #                                          )
+
+                HelperIntentModelUtility.update_test_log(robot_id=robot_id,
                                                          model_id=model_id,
                                                          total_count=total_count,
                                                          correct_count=correct_count,
@@ -633,33 +659,45 @@ if __name__ == '__main__':
                 if one_skill:
                     sentence_df = sentence_df[sentence_df['skill_id'] != other_skill_id]
 
+                """
+                queue error >> retrain
+                check sentence_log is existed
+                """
+                sentence_log_df = HelperIntentModelUtility.query_train_sentence_log(robot_id=robot_id,
+                                                                                    model_id=model_id)
+
                 cql_list = []
                 param_tuple_list = []
-                for index, row in sentence_df.iterrows():
-                    cql, param_tuple = HelperIntentModelUtility.insert_train_sentence_log_get_cql(robot_id=robot_id,
-                                                                                                  model_id=model_id,
-                                                                                                  skill_id=row[
-                                                                                                      'skill_id'],
-                                                                                                  sentence_id=row[
-                                                                                                      'sentence_id'],
-                                                                                                  sentence=row[
-                                                                                                      'sentence'],
-                                                                                                  cut_sentence=row[
-                                                                                                      'cut_words'],
-                                                                                                  create_date=row[
-                                                                                                      'create_date_x']
-                                                                                                  )
-                    cql_list.append(cql)
-                    param_tuple_list.append(param_tuple)
+                if len(sentence_log_df) > 0:
+                    pass
 
-                    # HelperIntentModelUtility.insert_train_sentence_log(robot_id=robot_id,
-                    #                                                    model_id=model_id,
-                    #                                                    skill_id=row['skill_id'],
-                    #                                                    sentence_id=row['sentence_id'],
-                    #                                                    sentence=row['sentence'],
-                    #                                                    cut_sentence=row['cut_words'],
-                    #                                                    create_date=row['create_date_x']
-                    #                                                    )
+                else:
+
+                    for index, row in sentence_df.iterrows():
+                        cql, param_tuple = HelperIntentModelUtility.insert_train_sentence_log_get_cql(robot_id=robot_id,
+                                                                                                      model_id=model_id,
+                                                                                                      skill_id=row[
+                                                                                                          'skill_id'],
+                                                                                                      sentence_id=row[
+                                                                                                          'sentence_id'],
+                                                                                                      sentence=row[
+                                                                                                          'sentence'],
+                                                                                                      cut_sentence=row[
+                                                                                                          'cut_words'],
+                                                                                                      create_date=row[
+                                                                                                          'create_date_x']
+                                                                                                      )
+                        cql_list.append(cql)
+                        param_tuple_list.append(param_tuple)
+
+                        # HelperIntentModelUtility.insert_train_sentence_log(robot_id=robot_id,
+                        #                                                    model_id=model_id,
+                        #                                                    skill_id=row['skill_id'],
+                        #                                                    sentence_id=row['sentence_id'],
+                        #                                                    sentence=row['sentence'],
+                        #                                                    cut_sentence=row['cut_words'],
+                        #                                                    create_date=row['create_date_x']
+                        #                                                    )
 
                 if len(cql_list) > 0:
                     # HelperIntentModelUtility.exec_cql_transations(cql_list)
@@ -678,7 +716,35 @@ if __name__ == '__main__':
                 #                data=[data]
                 #                )
 
+        """
+        basic_ack
+        """
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+
+        """
+        basic_nack, requeue=False
+        """
+        # ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
     # queue啓動
     queue_id = Get_MyEnv().env_mq_name_intent_train_dl_queue
-    mq.start_consuming(queue_id, callback=train)
+
+    mq.start_consuming(queue_id,
+                       callback=train,
+                       auto_ack=False,
+                       durable=True)
+
+    # """
+    # AuotAck = False
+    # """
+    # conn = mq.get_connect()
+    # channel = conn.channel()
+    # channel.queue_declare(queue=queue_id, durable=True)
+    # channel.basic_consume(on_message_callback=train,
+    #                       queue=queue_id,
+    #                       auto_ack=False)
+    # channel.basic_qos(prefetch_count=1)
+    #
+    # print(' [*] Waiting for messages. To exit press CTRL+C')
+    # channel.start_consuming()
+
